@@ -25,6 +25,7 @@ const tcp_message = @import("../wire/tcp_message.zig");
 const consensus_verify = @import("../crypto/consensus_verify.zig");
 const hash_mod = @import("../model/hash.zig");
 const follower_mod = @import("follower.zig");
+const block_store = @import("../storage/block_store.zig");
 
 /// What the caller gets back for each successfully-decoded event.
 pub const SyncEvent = union(enum) {
@@ -222,13 +223,39 @@ pub fn syncFromHeight(
 /// Connect to a DA server, stream blocks, verify their BLS certificates,
 /// and print a one-line summary per block. This is the entry point for the
 /// `da-sync` subcommand.
+///
+/// When `store_path` is non-null, blocks are persisted to an append-only
+/// file. On subsequent runs, the sync automatically resumes from the
+/// last stored block.
 pub fn syncAndReport(
     allocator: std.mem.Allocator,
     stdout: anytype,
     da_address: []const u8,
     start_height: u64,
+    store_path: ?[]const u8,
 ) !void {
-    try stdout.print("da-sync: connecting to {s}, starting from height {d}\n", .{ da_address, start_height });
+    // Open the block store if requested.
+    var store: ?block_store.BlockStore = null;
+    if (store_path) |path| {
+        store = block_store.BlockStore.open(allocator, path) catch |err| {
+            try stdout.print("da-sync: failed to open block store at {s}: {s}\n", .{ path, @errorName(err) });
+            return;
+        };
+        try stdout.print("da-sync: block store at {s} — {d} blocks, latest slot {d}\n", .{
+            path,
+            store.?.count,
+            store.?.latest_slot,
+        });
+    }
+    defer if (store != null) store.?.close();
+
+    // If the store has blocks, resume from after the last one.
+    const effective_height = if (store != null and store.?.count > 0)
+        start_height + @as(u64, @intCast(store.?.count))
+    else
+        start_height;
+
+    try stdout.print("da-sync: connecting to {s}, starting from height {d}\n", .{ da_address, effective_height });
     try stdout.flush();
 
     // Parse address.
@@ -255,7 +282,7 @@ pub fn syncAndReport(
 
     // Send StreamFromHeight request.
     const request_frame = da_wire.encodeRequestFrameAlloc(allocator, .{
-        .stream_from_height = .{ .height = start_height },
+        .stream_from_height = .{ .height = effective_height },
     }) catch {
         try stdout.print("da-sync: failed to encode request\n", .{});
         return;
@@ -283,8 +310,26 @@ pub fn syncAndReport(
     var blocks: usize = 0;
     var verified: usize = 0;
     var not_found: usize = 0;
+    var stored: usize = 0;
     var chain = ChainValidator{};
     var follower = follower_mod.Follower.init();
+
+    // If the store has blocks, seed the chain validator and follower
+    // with the last stored block so continuity checks work from the
+    // first new block we receive.
+    if (store != null and store.?.count > 0) {
+        const maybe_last = store.?.getBySlot(store.?.latest_slot) catch null;
+        if (maybe_last) |last_val| {
+            var last = last_val;
+            defer last.deinit();
+            // Seed chain validator with the last block's hash.
+            const last_digest = hash_mod.consensusProposalHashed(&last.value.consensus_proposal);
+            chain.last_hash = last_digest;
+            chain.last_slot = last.value.consensus_proposal.slot;
+            // Seed follower.
+            _ = follower.handleSignedBlock(last.value);
+        }
+    }
 
     while (true) {
         const maybe_frame = frames.nextFrame(&stream_reader) catch {
@@ -343,8 +388,19 @@ pub fn syncAndReport(
                 if (bls_ok) verified += 1;
                 const bls_label: []const u8 = if (bls_ok) "ok" else "BAD";
 
-                try stdout.print("block {d}: slot={d} lanes={d} validators={d} [chain={s} bls={s} follower={s}]\n", .{
-                    blocks, slot, n_lanes, n_validators, chain_label, bls_label, f_label,
+                // Persist to the block store if open and chain-valid.
+                var store_label: []const u8 = "-";
+                if (store != null and chain_result == .ok) {
+                    _ = store.?.append(block) catch |err| {
+                        try stdout.print("da-sync: store write error: {s}\n", .{@errorName(err)});
+                        break;
+                    };
+                    stored += 1;
+                    store_label = "stored";
+                }
+
+                try stdout.print("block {d}: slot={d} lanes={d} validators={d} [chain={s} bls={s} follower={s} store={s}]\n", .{
+                    blocks, slot, n_lanes, n_validators, chain_label, bls_label, f_label, store_label,
                 });
                 try stdout.flush();
             },
@@ -356,8 +412,8 @@ pub fn syncAndReport(
         }
     }
 
-    try stdout.print("da-sync: done — {d} blocks ({d} verified, {d} chain-ok), {d} not-found, follower at slot {d}\n", .{
-        blocks, verified, chain.accepted, not_found, follower.slot,
+    try stdout.print("da-sync: done — {d} blocks ({d} verified, {d} chain-ok, {d} stored), {d} not-found, follower at slot {d}\n", .{
+        blocks, verified, chain.accepted, stored, not_found, follower.slot,
     });
 }
 

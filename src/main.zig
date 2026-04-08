@@ -49,6 +49,7 @@ fn printUsage(stdout: anytype) !void {
         \\OPTIONS:
         \\    --identity <path>              Load or create a persistent BLS keypair at <path>.
         \\                                   Without this, a fresh ephemeral key is used per run.
+        \\    --store <path>                 (da-sync) Persist blocks to file. Resumes on restart.
         \\
         \\See docs/implementation-plan.md for the full roadmap.
         \\
@@ -114,9 +115,21 @@ pub fn main() !void {
                 }
             else
                 0;
-            try zyli.node.da_sync.syncAndReport(allocator, stdout, args[2], start);
+            const store_path = resolveStoreFlag(args);
+            try zyli.node.da_sync.syncAndReport(allocator, stdout, args[2], start, store_path);
         },
     }
+}
+
+/// Resolve the --store <path> flag for the da-sync subcommand.
+fn resolveStoreFlag(args: []const []const u8) ?[]const u8 {
+    var i: usize = 0;
+    while (i < args.len) : (i += 1) {
+        if (std.mem.eql(u8, args[i], "--store") and i + 1 < args.len) {
+            return args[i + 1];
+        }
+    }
+    return null;
 }
 
 /// Resolve the BLS secret key: if an `--identity <path>` flag was given,
