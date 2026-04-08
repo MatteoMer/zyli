@@ -16,10 +16,12 @@ const zyli = @import("zyli");
 const Subcommand = enum {
     help,
     observe,
+    replay,
 };
 
 fn parseSubcommand(arg: []const u8) ?Subcommand {
     if (std.mem.eql(u8, arg, "observe")) return .observe;
+    if (std.mem.eql(u8, arg, "replay")) return .replay;
     if (std.mem.eql(u8, arg, "--help") or std.mem.eql(u8, arg, "-h") or std.mem.eql(u8, arg, "help"))
         return .help;
     return null;
@@ -34,6 +36,7 @@ fn printUsage(stdout: anytype) !void {
         \\
         \\SUBCOMMANDS:
         \\    observe <host>:<port>    Connect to a Hyli peer, decode frames, print message labels.
+        \\    replay <file>            Decode framed bytes from a file using the same pipeline.
         \\    help                     Show this help text.
         \\
         \\See docs/implementation-plan.md for the full roadmap.
@@ -73,6 +76,13 @@ pub fn main() !void {
                 return;
             }
             try observe(allocator, stdout, args[2]);
+        },
+        .replay => {
+            if (args.len < 3) {
+                try stdout.writeAll("replay: missing <file> argument\n");
+                return;
+            }
+            try replay(allocator, stdout, args[2]);
         },
     }
 }
@@ -137,6 +147,62 @@ fn observe(
         };
         const frame = maybe_frame orelse {
             try stdout.print("observe: peer closed cleanly after {d} frames\n", .{frame_count});
+            return;
+        };
+        frame_count += 1;
+        const kind = zyli.wire.tcp_message.classifyFrame(frame);
+        switch (kind) {
+            .ping => try stdout.print("frame {d}: PING ({d} bytes)\n", .{ frame_count, frame.len }),
+            .data => try printDataFrame(allocator, stdout, frame_count, frame),
+        }
+        try stdout.flush();
+    }
+}
+
+/// Decode framed bytes from a file using the same pipeline as `observe`.
+/// Useful for offline analysis of captured testnet traffic — feed
+/// previously-recorded P2PTcpMessage frames in and get the same decode +
+/// validate + format output without needing a live socket.
+///
+/// File format: a sequence of length-delimited frames using the same
+/// 4-byte BE length prefix `tokio_util::LengthDelimitedCodec` produces
+/// (see `src/wire/framing.zig`).
+fn replay(
+    allocator: std.mem.Allocator,
+    stdout: anytype,
+    path: []const u8,
+) !void {
+    var file = std.fs.cwd().openFile(path, .{}) catch |err| {
+        try stdout.print("replay: failed to open `{s}`: {s}\n", .{ path, @errorName(err) });
+        return;
+    };
+    defer file.close();
+    try stdout.print("replay: reading {s}\n", .{path});
+    try stdout.flush();
+
+    // Adapter: StreamFrameReader is generic over a `read([]u8) !usize`
+    // shape. std.fs.File.read matches that directly.
+    const FileReader = struct {
+        inner: std.fs.File,
+        pub fn read(self: *@This(), buf: []u8) !usize {
+            return self.inner.read(buf);
+        }
+    };
+    var file_reader: FileReader = .{ .inner = file };
+    var frames = zyli.wire.framing.StreamFrameReader(*FileReader).init(allocator);
+    defer frames.deinit();
+
+    var frame_count: usize = 0;
+    while (true) {
+        const maybe_frame = frames.nextFrame(&file_reader) catch |err| {
+            try stdout.print("replay: frame read error after {d} frames: {s}\n", .{
+                frame_count,
+                @errorName(err),
+            });
+            return;
+        };
+        const frame = maybe_frame orelse {
+            try stdout.print("replay: end of file after {d} frames\n", .{frame_count});
             return;
         };
         frame_count += 1;
