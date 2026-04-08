@@ -29,6 +29,7 @@ const zolt_arith = @import("zolt_arith");
 const types = @import("../model/types.zig");
 const signable = @import("signable.zig");
 const adapter = @import("zolt_arith_adapter.zig");
+const borsh = @import("../model/borsh.zig");
 
 const bls = zolt_arith.bls;
 const decodeG1Compressed = zolt_arith.bls12_381.decodeG1Compressed;
@@ -54,7 +55,7 @@ pub const Error = error{
     PublicKeyNotInSubgroup,
     SignatureNotInSubgroup,
     HashFailed,
-} || std.mem.Allocator.Error;
+} || borsh.Error;
 
 /// Lowest-level entry point: verify that `sig_bytes` is a valid BLS
 /// signature on `msg` under the public key encoded in `pk_bytes`.

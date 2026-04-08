@@ -367,6 +367,23 @@ fn printDataFrame(
     if (decoded.value == .data) {
         const event = follower.handle(decoded.value.data);
         try printFollowerEvent(stdout, event);
+
+        // Cryptographic verification: run the BLS verifier over every
+        // signature embedded in the message. We compute the verdict
+        // separately from the structural one because pairing is slow
+        // and we want the structural reject to short-circuit it. The
+        // result is reported as `bls=ok|BAD|err` so live testnet
+        // traffic can be eyeballed for forged or stale signatures.
+        const bls_verdict = zyli.crypto.consensus_verify.verifyConsensusMessage(
+            allocator,
+            decoded.value.data,
+        ) catch |err| {
+            try stdout.print(" {{bls=err: {s}}}", .{@errorName(err)});
+            try stdout.print("\n", .{});
+            return;
+        };
+        const bls_label: []const u8 = if (bls_verdict) "ok" else "BAD";
+        try stdout.print(" {{bls={s}}}", .{bls_label});
     }
     try stdout.print("\n", .{});
 }

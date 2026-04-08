@@ -18,6 +18,7 @@ pub const signable = @import("signable.zig");
 pub const zolt_arith = @import("zolt_arith");
 pub const zolt_arith_adapter = @import("zolt_arith_adapter.zig");
 pub const bls = @import("bls.zig");
+pub const consensus_verify = @import("consensus_verify.zig");
 
 test {
     _ = signable;
@@ -28,4 +29,5 @@ test {
     _ = zolt_arith.bigint;
     _ = zolt_arith_adapter;
     _ = bls;
+    _ = consensus_verify;
 }
