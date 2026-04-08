@@ -14,6 +14,7 @@ pub const tcp_message = @import("tcp_message.zig");
 pub const handshake = @import("handshake.zig");
 pub const protocol = @import("protocol.zig");
 pub const validate = @import("validate.zig");
+pub const da = @import("da.zig");
 
 test {
     _ = framing;
@@ -21,4 +22,5 @@ test {
     _ = handshake;
     _ = protocol;
     _ = validate;
+    _ = da;
 }

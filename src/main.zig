@@ -19,12 +19,14 @@ const Subcommand = enum {
     observe,
     replay,
     record,
+    da_sync,
 };
 
 fn parseSubcommand(arg: []const u8) ?Subcommand {
     if (std.mem.eql(u8, arg, "observe")) return .observe;
     if (std.mem.eql(u8, arg, "replay")) return .replay;
     if (std.mem.eql(u8, arg, "record")) return .record;
+    if (std.mem.eql(u8, arg, "da-sync")) return .da_sync;
     if (std.mem.eql(u8, arg, "--help") or std.mem.eql(u8, arg, "-h") or std.mem.eql(u8, arg, "help"))
         return .help;
     return null;
@@ -41,6 +43,7 @@ fn printUsage(stdout: anytype) !void {
         \\    observe <host>:<port>          Connect to a Hyli peer, decode, print summaries.
         \\    record <host>:<port> <file>    Connect, capture framed bytes to a file.
         \\    replay <file>                  Decode framed bytes from a file using the same pipeline.
+        \\    da-sync <host>:<port> [height] Sync signed blocks from a DA server.
         \\    help                           Show this help text.
         \\
         \\See docs/implementation-plan.md for the full roadmap.
@@ -94,6 +97,20 @@ pub fn main() !void {
                 return;
             }
             try record(allocator, stdout, args[2], args[3]);
+        },
+        .da_sync => {
+            if (args.len < 3) {
+                try stdout.writeAll("da-sync: missing <host>:<port> argument\n");
+                return;
+            }
+            const start: u64 = if (args.len >= 4)
+                std.fmt.parseUnsigned(u64, args[3], 10) catch {
+                    try stdout.print("da-sync: invalid height `{s}`\n", .{args[3]});
+                    return;
+                }
+            else
+                0;
+            try zyli.node.da_sync.syncAndReport(allocator, stdout, args[2], start);
         },
     }
 }

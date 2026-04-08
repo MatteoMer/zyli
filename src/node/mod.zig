@@ -10,8 +10,10 @@
 
 pub const follower = @import("follower.zig");
 pub const handshake = @import("handshake.zig");
+pub const da_sync = @import("da_sync.zig");
 
 test {
     _ = follower;
     _ = handshake;
+    _ = da_sync;
 }
