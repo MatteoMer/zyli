@@ -623,6 +623,8 @@ fn replayStore(
 
     var chain = zyli.node.da_sync.ChainValidator{};
     var follower = zyli.node.follower.Follower.init();
+    var replay_state = zyli.state.replay.ReplayState.init(allocator);
+    defer replay_state.deinit();
     var verified: usize = 0;
     var replayed: usize = 0;
 
@@ -653,6 +655,9 @@ fn replayStore(
             else => "other",
         };
 
+        // State replay.
+        replay_state.applyBlock(block);
+
         // BLS verification.
         const bls_ok = zyli.crypto.consensus_verify.verifySignedBlockCertificate(
             allocator,
@@ -669,8 +674,14 @@ fn replayStore(
         if (replayed % 100 == 0) try stdout.flush();
     }
 
-    try stdout.print("replay-store: done — {d} blocks replayed ({d} verified, {d} chain-ok), follower at slot {d}\n", .{
+    try stdout.print("replay-store: done — {d} blocks, {d} verified, {d} chain-ok, follower at slot {d}\n", .{
         replayed, verified, chain.accepted, follower.slot,
+    });
+    try stdout.print("replay-store: state — {d} blob txs, {d} proof txs, {d} contracts, {d} staking actions\n", .{
+        replay_state.blob_tx_count,
+        replay_state.proof_tx_count,
+        replay_state.contract_count,
+        replay_state.staking_action_count,
     });
     try stdout.flush();
 }
