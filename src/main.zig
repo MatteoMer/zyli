@@ -20,6 +20,7 @@ const Subcommand = enum {
     replay,
     record,
     da_sync,
+    replay_store,
 };
 
 fn parseSubcommand(arg: []const u8) ?Subcommand {
@@ -27,6 +28,7 @@ fn parseSubcommand(arg: []const u8) ?Subcommand {
     if (std.mem.eql(u8, arg, "replay")) return .replay;
     if (std.mem.eql(u8, arg, "record")) return .record;
     if (std.mem.eql(u8, arg, "da-sync")) return .da_sync;
+    if (std.mem.eql(u8, arg, "replay-store")) return .replay_store;
     if (std.mem.eql(u8, arg, "--help") or std.mem.eql(u8, arg, "-h") or std.mem.eql(u8, arg, "help"))
         return .help;
     return null;
@@ -44,6 +46,7 @@ fn printUsage(stdout: anytype) !void {
         \\    record <host>:<port> <file>    Connect, capture framed bytes to a file.
         \\    replay <file>                  Decode framed bytes from a file using the same pipeline.
         \\    da-sync <host>:<port> [height] Sync signed blocks from a DA server.
+        \\    replay-store <file>            Replay all blocks from a store file through the follower.
         \\    help                           Show this help text.
         \\
         \\OPTIONS:
@@ -102,6 +105,13 @@ pub fn main() !void {
                 return;
             }
             try record(allocator, stdout, args[2], args[3], resolveIdentity(args));
+        },
+        .replay_store => {
+            if (args.len < 3) {
+                try stdout.writeAll("replay-store: missing <file> argument\n");
+                return;
+            }
+            try replayStore(allocator, stdout, args[2]);
         },
         .da_sync => {
             if (args.len < 3) {
@@ -574,6 +584,95 @@ fn replay(
         }
         try stdout.flush();
     }
+}
+
+/// Replay all signed blocks from a block-store file through the
+/// ChainValidator, Follower, and BLS verifier. Produces a summary
+/// of chain integrity and commit progress. This is the offline
+/// counterpart to `da-sync --store`: verify stored blocks without
+/// a network connection.
+fn replayStore(
+    allocator: std.mem.Allocator,
+    stdout: anytype,
+    path: []const u8,
+) !void {
+    var store = zyli.storage.block_store.BlockStore.open(allocator, path) catch |err| {
+        try stdout.print("replay-store: failed to open {s}: {s}\n", .{ path, @errorName(err) });
+        return;
+    };
+    defer store.close();
+
+    try stdout.print("replay-store: {s} — {d} blocks, latest slot {d}\n", .{
+        path,
+        store.count,
+        store.latest_slot,
+    });
+    try stdout.flush();
+
+    if (store.count == 0) {
+        try stdout.print("replay-store: empty store, nothing to replay\n", .{});
+        return;
+    }
+
+    // Get all slots in order.
+    const slots = store.allSlots(allocator) catch |err| {
+        try stdout.print("replay-store: failed to enumerate slots: {s}\n", .{@errorName(err)});
+        return;
+    };
+    defer allocator.free(slots);
+
+    var chain = zyli.node.da_sync.ChainValidator{};
+    var follower = zyli.node.follower.Follower.init();
+    var verified: usize = 0;
+    var replayed: usize = 0;
+
+    for (slots) |slot| {
+        var decoded = (store.getBySlot(slot) catch continue) orelse continue;
+        defer decoded.deinit();
+        const block = decoded.value;
+
+        replayed += 1;
+        const n_lanes = block.data_proposals.len;
+        const n_validators = block.certificate.validators.len;
+
+        // Chain validation.
+        const chain_result = chain.validate(block);
+        const chain_label: []const u8 = switch (chain_result) {
+            .ok => "ok",
+            .height_not_monotonic => "HEIGHT",
+            .parent_hash_mismatch => "PARENT",
+        };
+
+        // Follower.
+        const f_event = follower.handleSignedBlock(block);
+        const f_label: []const u8 = switch (f_event) {
+            .committed => "committed",
+            .observed => "stale",
+            .rejected => "rejected",
+            .gap_detected => "gap",
+            else => "other",
+        };
+
+        // BLS verification.
+        const bls_ok = zyli.crypto.consensus_verify.verifySignedBlockCertificate(
+            allocator,
+            block,
+        ) catch false;
+        if (bls_ok) verified += 1;
+        const bls_label: []const u8 = if (bls_ok) "ok" else "BAD";
+
+        try stdout.print("block {d}: slot={d} lanes={d} validators={d} [chain={s} bls={s} follower={s}]\n", .{
+            replayed, slot, n_lanes, n_validators, chain_label, bls_label, f_label,
+        });
+
+        // Flush every 100 blocks to keep the terminal responsive.
+        if (replayed % 100 == 0) try stdout.flush();
+    }
+
+    try stdout.print("replay-store: done — {d} blocks replayed ({d} verified, {d} chain-ok), follower at slot {d}\n", .{
+        replayed, verified, chain.accepted, follower.slot,
+    });
+    try stdout.flush();
 }
 
 /// Result from processDataFrame: a sync request hash if a gap was detected.
