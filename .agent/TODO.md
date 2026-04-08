@@ -23,7 +23,7 @@ Still missing for full BLS verification:
 - BLS verify entry point
 - Subgroup membership checks for hostile inputs
 
-**210 tests passing in zyli, 171 in zolt-arith (381 total). 139 fixtures.**
+**225 tests passing in zyli, 171 in zolt-arith (396 total). 150 fixtures.**
 
 - `build.zig` / `build.zig.zon` set up; library + executable build cleanly.
 - Borsh codec in `src/model/borsh.zig` covers primitives, options, slices,
@@ -131,6 +131,16 @@ Still missing for full BLS verification:
   `DataAvailabilityRequest::{StreamFromHeight, BlockRequest}`, and
   `DataAvailabilityEvent::{SignedBlock, MempoolStatusEvent, BlockNotFound}`.
   All have Zig mirrors and round-trip tests.
+- Staking and indexer-side wire shapes are pinned: `StakingAction`
+  (Stake/Delegate/DepositForFees variants — Distribute uses
+  RewardsClaim with no public Rust constructor), `Contract` (the
+  on-disk record for a registered contract), and every variant of
+  `TransactionStateEvent` (Sequenced, Settled, SettledAsFailed,
+  TimedOut, DroppedAsDuplicate, Error, NewProof).
+- The structural validator now mirrors three more upstream invariants:
+  Genesis ticket only valid for slot=1, slot=0 always invalid, and
+  Confirm/Commit/TimeoutCertificate aggregate signatures must have
+  at least one validator.
 - `src/wire/protocol.zig` exposes a `decodeP2PTcpMessage(allocator,
   Data, frame_bytes)` helper that returns a `Decoded(Data)` value
   backed by an internal arena allocator. The arena shape exists
