@@ -16,9 +16,12 @@ use std::path::{Path, PathBuf};
 
 use borsh::BorshSerialize;
 use hyli_model::{
-    utils::TimestampMs, Blob, BlobData, BlobIndex, BlockHeight, ContractName, DataProposal,
-    DataProposalHash, DataProposalParent, Hashed, Identity, LaneId, ProgramId,
-    RegisterContractAction, StateCommitment, TimeoutWindow, Verifier,
+    utils::TimestampMs, AggregateSignature, Blob, BlobData, BlobIndex, BlobTransaction,
+    BlockHeight, ContractName, DataProposal, DataProposalHash, DataProposalParent, Hashed,
+    Identity, LaneId, ProgramId, ProofData, ProofDataHash, ProofTransaction,
+    RegisterContractAction, Signature, Signed, StateCommitment, TimeoutWindow, Transaction,
+    TransactionData, ValidatorCandidacy, ValidatorPublicKey, ValidatorSignature, Verifier,
+    VerifiedProofTransaction,
 };
 use sha3::Digest as _;
 
@@ -438,6 +441,187 @@ fn main() {
         "hyli_model::DataProposalParent",
         "DataProposalParent::DP(\"parent\")",
         &DataProposalParent::DP(DataProposalHash(b"parent".to_vec())),
+    );
+
+    // ---- T1: Transaction family --------------------------------------------
+    //
+    // BlobTransaction with two blobs. Identity is `alice@hyli` so the
+    // identity-validation rule (the "@<contract>" suffix must match a
+    // blob's contract_name) holds. The hash_cache and blobshash_cache
+    // fields are `#[borsh(skip)]` and must NOT show up in the wire bytes,
+    // so the encoded length is purely identity + blobs.
+    let blob_tx_blobs = vec![
+        Blob {
+            contract_name: ContractName("hyli".to_string()),
+            data: BlobData(vec![0xaa, 0xbb]),
+        },
+        Blob {
+            contract_name: ContractName("counter".to_string()),
+            data: BlobData(vec![0x01, 0x02, 0x03, 0x04]),
+        },
+    ];
+    let blob_tx = BlobTransaction::new("alice@hyli", blob_tx_blobs.clone());
+    gen.write_borsh(
+        "model/blob_transaction",
+        "hyli_model::BlobTransaction",
+        "BlobTransaction(alice@hyli, [Blob(hyli,…), Blob(counter,…)])",
+        &blob_tx,
+    );
+    gen.write_hash(
+        "model/blob_transaction",
+        "hyli_model::BlobTransaction",
+        "BlobTransaction::hashed for the matching borsh fixture",
+        blob_tx.hashed().0,
+    );
+
+    // ProofTransaction sample. Note: ProofData is the raw proof bytes,
+    // ProofDataHash is sha3_256 of the ProofData; the latter is what gets
+    // mixed into TxHash, not the proof itself.
+    let proof_data = ProofData(vec![0x42; 16]);
+    let proof_tx = ProofTransaction {
+        contract_name: ContractName("counter".to_string()),
+        program_id: ProgramId(vec![0xde, 0xad]),
+        verifier: Verifier("risc0".to_string()),
+        proof: proof_data.clone(),
+    };
+    gen.write_borsh(
+        "model/proof_transaction",
+        "hyli_model::ProofTransaction",
+        "ProofTransaction(counter, risc0, ProofData([0x42; 16]))",
+        &proof_tx,
+    );
+    gen.write_hash(
+        "model/proof_transaction",
+        "hyli_model::ProofTransaction",
+        "ProofTransaction::hashed",
+        proof_tx.hashed().0,
+    );
+    gen.write_hash(
+        "model/proof_data",
+        "hyli_model::ProofData",
+        "ProofData::hashed for [0x42; 16]",
+        proof_data.hashed().0,
+    );
+
+    // VerifiedProofTransaction. proof = None on this fixture so we exercise
+    // the Option<ProofData> = None path. The hash should be identical to
+    // ProofTransaction's because both feed program_id, verifier,
+    // contract_name, and proof_hash into the hasher.
+    let proof_data_hash = ProofDataHash(proof_data.hashed().0.clone());
+    let verified_proof_tx = VerifiedProofTransaction {
+        contract_name: ContractName("counter".to_string()),
+        program_id: ProgramId(vec![0xde, 0xad]),
+        verifier: Verifier("risc0".to_string()),
+        proof: None,
+        proof_hash: proof_data_hash.clone(),
+        proof_size: proof_data.0.len(),
+        proven_blobs: vec![],
+        is_recursive: false,
+    };
+    gen.write_borsh(
+        "model/verified_proof_transaction",
+        "hyli_model::VerifiedProofTransaction",
+        "VerifiedProofTransaction(counter, proof=None, proof_size=16)",
+        &verified_proof_tx,
+    );
+    gen.write_hash(
+        "model/verified_proof_transaction",
+        "hyli_model::VerifiedProofTransaction",
+        "VerifiedProofTransaction::hashed",
+        verified_proof_tx.hashed().0,
+    );
+
+    // Transaction wrapping a BlobTransaction — exercises the enum-tagged
+    // `TransactionData` envelope. The version field should land first
+    // (it's a struct field declared before transaction_data).
+    let tx_blob = Transaction {
+        version: 1,
+        transaction_data: TransactionData::Blob(blob_tx.clone()),
+    };
+    gen.write_borsh(
+        "model/transaction_blob",
+        "hyli_model::Transaction",
+        "Transaction { version=1, data=Blob(...) }",
+        &tx_blob,
+    );
+
+    // Transaction wrapping a ProofTransaction.
+    let tx_proof = Transaction {
+        version: 1,
+        transaction_data: TransactionData::Proof(proof_tx.clone()),
+    };
+    gen.write_borsh(
+        "model/transaction_proof",
+        "hyli_model::Transaction",
+        "Transaction { version=1, data=Proof(...) }",
+        &tx_proof,
+    );
+
+    // ---- T1: Signed envelopes ----------------------------------------------
+    //
+    // Signed<ValidatorCandidacy, ValidatorSignature> is the canonical
+    // SignedByValidator<T> shape used for consensus messages. We pin both
+    // a representative concrete payload and the standalone signature
+    // newtypes so the Zig side can validate the envelope and the inner
+    // crypto bytes independently.
+    let validator_pubkey = ValidatorPublicKey(vec![0x01; 4]);
+    gen.write_borsh(
+        "model/validator_public_key",
+        "hyli_model::ValidatorPublicKey",
+        "ValidatorPublicKey([0x01; 4])",
+        &validator_pubkey,
+    );
+    let signature = Signature(vec![0xff; 8]);
+    gen.write_borsh(
+        "model/signature_8_bytes",
+        "hyli_model::Signature",
+        "Signature([0xff; 8])",
+        &signature,
+    );
+    let validator_signature = ValidatorSignature {
+        signature: signature.clone(),
+        validator: validator_pubkey.clone(),
+    };
+    gen.write_borsh(
+        "model/validator_signature",
+        "hyli_model::ValidatorSignature",
+        "ValidatorSignature { sig=[0xff;8], validator=[0x01;4] }",
+        &validator_signature,
+    );
+    let candidacy = ValidatorCandidacy {
+        peer_address: "127.0.0.1:4242".to_string(),
+    };
+    gen.write_borsh(
+        "model/validator_candidacy",
+        "hyli_model::ValidatorCandidacy",
+        "ValidatorCandidacy { peer_address=\"127.0.0.1:4242\" }",
+        &candidacy,
+    );
+    let signed_candidacy: Signed<ValidatorCandidacy, ValidatorSignature> = Signed {
+        msg: candidacy.clone(),
+        signature: validator_signature.clone(),
+    };
+    gen.write_borsh(
+        "model/signed_validator_candidacy",
+        "hyli_model::Signed<ValidatorCandidacy, ValidatorSignature>",
+        "SignedByValidator<ValidatorCandidacy>",
+        &signed_candidacy,
+    );
+
+    // AggregateSignature exercising 2 validators. This is the wire shape used
+    // for PoDA and consensus aggregate proofs.
+    let agg = AggregateSignature {
+        signature: Signature(vec![0xee; 12]),
+        validators: vec![
+            ValidatorPublicKey(vec![0x01; 4]),
+            ValidatorPublicKey(vec![0x02; 4]),
+        ],
+    };
+    gen.write_borsh(
+        "model/aggregate_signature_2",
+        "hyli_model::AggregateSignature",
+        "AggregateSignature with 2 validators",
+        &agg,
     );
 
     let hyli_rev = detect_hyli_revision();

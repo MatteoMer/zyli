@@ -205,3 +205,158 @@ test "fixture: DataProposalParent::DP(\"parent\")" {
         corpus.borsh.model.data_proposal_parent_dp,
     );
 }
+
+// ---------------------------------------------------------------------------
+// Transaction family
+// ---------------------------------------------------------------------------
+
+/// Reusable BlobTransaction sample. Mirrors the Rust fixture exactly.
+fn sampleBlobTransaction() types.BlobTransaction {
+    const blobs = &[_]types.Blob{
+        .{
+            .contract_name = .{ .value = "hyli" },
+            .data = .{ .bytes = &[_]u8{ 0xaa, 0xbb } },
+        },
+        .{
+            .contract_name = .{ .value = "counter" },
+            .data = .{ .bytes = &[_]u8{ 0x01, 0x02, 0x03, 0x04 } },
+        },
+    };
+    return .{
+        .identity = .{ .value = "alice@hyli" },
+        .blobs = blobs,
+    };
+}
+
+fn sampleProofTransaction() types.ProofTransaction {
+    return .{
+        .contract_name = .{ .value = "counter" },
+        .program_id = .{ .bytes = &[_]u8{ 0xde, 0xad } },
+        .verifier = .{ .value = "risc0" },
+        .proof = .{ .bytes = &[_]u8{0x42} ** 16 },
+    };
+}
+
+test "fixture: BlobTransaction(alice@hyli, [hyli, counter])" {
+    try expectMatchesFixture(
+        types.BlobTransaction,
+        sampleBlobTransaction(),
+        corpus.borsh.model.blob_transaction,
+    );
+}
+
+test "fixture: ProofTransaction(counter, risc0)" {
+    try expectMatchesFixture(
+        types.ProofTransaction,
+        sampleProofTransaction(),
+        corpus.borsh.model.proof_transaction,
+    );
+}
+
+test "fixture: VerifiedProofTransaction(counter, proof=None)" {
+    // The Rust fixture computes proof_hash from sha3_256(proof_data); we
+    // re-derive the same digest in the test rather than embedding the
+    // expected hash bytes inline.
+    const proof_data_bytes = &[_]u8{0x42} ** 16;
+    var hasher = std.crypto.hash.sha3.Sha3_256.init(.{});
+    hasher.update(proof_data_bytes);
+    var digest: [32]u8 = undefined;
+    hasher.final(&digest);
+    const value: types.VerifiedProofTransaction = .{
+        .contract_name = .{ .value = "counter" },
+        .program_id = .{ .bytes = &[_]u8{ 0xde, 0xad } },
+        .verifier = .{ .value = "risc0" },
+        .proof = null,
+        .proof_hash = .{ .bytes = &digest },
+        .proof_size = 16,
+        .proven_blobs = &[_]types.BlobProofOutput{},
+        .is_recursive = false,
+    };
+    try expectMatchesFixture(
+        types.VerifiedProofTransaction,
+        value,
+        corpus.borsh.model.verified_proof_transaction,
+    );
+}
+
+test "fixture: Transaction(version=1, Blob(...))" {
+    const value: types.Transaction = .{
+        .version = 1,
+        .transaction_data = .{ .blob = sampleBlobTransaction() },
+    };
+    try expectMatchesFixture(types.Transaction, value, corpus.borsh.model.transaction_blob);
+}
+
+test "fixture: Transaction(version=1, Proof(...))" {
+    const value: types.Transaction = .{
+        .version = 1,
+        .transaction_data = .{ .proof = sampleProofTransaction() },
+    };
+    try expectMatchesFixture(types.Transaction, value, corpus.borsh.model.transaction_proof);
+}
+
+// ---------------------------------------------------------------------------
+// Signed envelopes
+// ---------------------------------------------------------------------------
+
+test "fixture: ValidatorPublicKey([0x01;4])" {
+    try expectMatchesFixture(
+        types.ValidatorPublicKey,
+        .{ .bytes = &[_]u8{0x01} ** 4 },
+        corpus.borsh.model.validator_public_key,
+    );
+}
+
+test "fixture: Signature([0xff;8])" {
+    try expectMatchesFixture(
+        types.Signature,
+        .{ .bytes = &[_]u8{0xff} ** 8 },
+        corpus.borsh.model.signature_8_bytes,
+    );
+}
+
+test "fixture: ValidatorSignature" {
+    try expectMatchesFixture(
+        types.ValidatorSignature,
+        .{
+            .signature = .{ .bytes = &[_]u8{0xff} ** 8 },
+            .validator = .{ .bytes = &[_]u8{0x01} ** 4 },
+        },
+        corpus.borsh.model.validator_signature,
+    );
+}
+
+test "fixture: ValidatorCandidacy" {
+    try expectMatchesFixture(
+        types.ValidatorCandidacy,
+        .{ .peer_address = "127.0.0.1:4242" },
+        corpus.borsh.model.validator_candidacy,
+    );
+}
+
+test "fixture: SignedByValidator<ValidatorCandidacy>" {
+    const SignedT = types.Signed(types.ValidatorCandidacy, types.ValidatorSignature);
+    const value: SignedT = .{
+        .msg = .{ .peer_address = "127.0.0.1:4242" },
+        .signature = .{
+            .signature = .{ .bytes = &[_]u8{0xff} ** 8 },
+            .validator = .{ .bytes = &[_]u8{0x01} ** 4 },
+        },
+    };
+    try expectMatchesFixture(SignedT, value, corpus.borsh.model.signed_validator_candidacy);
+}
+
+test "fixture: AggregateSignature(2 validators)" {
+    const value: types.AggregateSignature = .{
+        .signature = .{ .bytes = &[_]u8{0xee} ** 12 },
+        .validators = &[_]types.ValidatorPublicKey{
+            .{ .bytes = &[_]u8{0x01} ** 4 },
+            .{ .bytes = &[_]u8{0x02} ** 4 },
+        },
+    };
+    try expectMatchesFixture(
+        types.AggregateSignature,
+        value,
+        corpus.borsh.model.aggregate_signature_2,
+    );
+}

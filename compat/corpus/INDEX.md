@@ -6,8 +6,10 @@ Source: `hyli` git revision `e41899eb582d2d25d13a97a425ec76250484d45c`.
 
 | Path | Rust type | Bytes | Description |
 |------|-----------|-------|-------------|
+| `borsh/model/aggregate_signature_2.bin` | `hyli_model::AggregateSignature` | 36 | AggregateSignature with 2 validators |
 | `borsh/model/blob_index_3.bin` | `hyli_model::BlobIndex` | 8 | BlobIndex(3) — note: usize → u64 on the wire |
 | `borsh/model/blob_simple.bin` | `hyli_model::Blob` | 15 | Blob { contract_name="hyli", data=[1,2,3] } |
+| `borsh/model/blob_transaction.bin` | `hyli_model::BlobTransaction` | 51 | BlobTransaction(alice@hyli, [Blob(hyli,…), Blob(counter,…)]) |
 | `borsh/model/block_height_42.bin` | `hyli_model::BlockHeight` | 8 | BlockHeight(42) |
 | `borsh/model/contract_name_hyli.bin` | `hyli_model::ContractName` | 8 | ContractName("hyli") |
 | `borsh/model/data_proposal_empty.bin` | `hyli_model::DataProposal` | 15 | DataProposal::new(parent="parent", txs=[]) |
@@ -16,12 +18,21 @@ Source: `hyli` git revision `e41899eb582d2d25d13a97a425ec76250484d45c`.
 | `borsh/model/identity_alice.bin` | `hyli_model::Identity` | 14 | Identity("alice@hyli") |
 | `borsh/model/lane_id_default.bin` | `hyli_model::LaneId` | 15 | LaneId::default() |
 | `borsh/model/program_id_4_bytes.bin` | `hyli_model::ProgramId` | 8 | ProgramId([0xde,0xad,0xbe,0xef]) |
+| `borsh/model/proof_transaction.bin` | `hyli_model::ProofTransaction` | 46 | ProofTransaction(counter, risc0, ProofData([0x42; 16])) |
 | `borsh/model/register_contract_action.bin` | `hyli_model::RegisterContractAction` | 71 | Sample RegisterContractAction with timeout + constructor metadata |
+| `borsh/model/signature_8_bytes.bin` | `hyli_model::Signature` | 12 | Signature([0xff; 8]) |
+| `borsh/model/signed_validator_candidacy.bin` | `hyli_model::Signed<ValidatorCandidacy, ValidatorSignature>` | 38 | SignedByValidator<ValidatorCandidacy> |
 | `borsh/model/state_commitment_4_bytes.bin` | `hyli_model::StateCommitment` | 8 | StateCommitment([0,1,2,3]) |
 | `borsh/model/timeout_window_default.bin` | `hyli_model::TimeoutWindow` | 17 | TimeoutWindow::Timeout { hard=100, soft=100 } |
 | `borsh/model/timeout_window_no_timeout.bin` | `hyli_model::TimeoutWindow` | 1 | TimeoutWindow::NoTimeout |
 | `borsh/model/timestamp_ms_max_u64.bin` | `hyli_model::TimestampMs` | 16 | TimestampMs(u64::MAX as u128) |
 | `borsh/model/timestamp_ms_unix_epoch.bin` | `hyli_model::TimestampMs` | 16 | TimestampMs(0) — sanity for u128 layout |
+| `borsh/model/transaction_blob.bin` | `hyli_model::Transaction` | 56 | Transaction { version=1, data=Blob(...) } |
+| `borsh/model/transaction_proof.bin` | `hyli_model::Transaction` | 51 | Transaction { version=1, data=Proof(...) } |
+| `borsh/model/validator_candidacy.bin` | `hyli_model::ValidatorCandidacy` | 18 | ValidatorCandidacy { peer_address="127.0.0.1:4242" } |
+| `borsh/model/validator_public_key.bin` | `hyli_model::ValidatorPublicKey` | 8 | ValidatorPublicKey([0x01; 4]) |
+| `borsh/model/validator_signature.bin` | `hyli_model::ValidatorSignature` | 20 | ValidatorSignature { sig=[0xff;8], validator=[0x01;4] } |
+| `borsh/model/verified_proof_transaction.bin` | `hyli_model::VerifiedProofTransaction` | 76 | VerifiedProofTransaction(counter, proof=None, proof_size=16) |
 | `borsh/model/verifier_risc0.bin` | `hyli_model::Verifier` | 9 | Verifier("risc0") |
 | `borsh/primitives/i32_neg_one.bin` | `i32` | 4 | -1 as two's complement |
 | `borsh/primitives/option_u32_none.bin` | `Option<u32>` | 1 | None |
@@ -35,6 +46,10 @@ Source: `hyli` git revision `e41899eb582d2d25d13a97a425ec76250484d45c`.
 | `borsh/primitives/vec_u32_two.bin` | `Vec<u32>` | 12 | [1, 2] |
 | `borsh/primitives/vec_u8_three.bin` | `Vec<u8>` | 7 | [1, 2, 3] |
 | `hash/model/blob_simple.bin` | `hyli_model::Blob` | 32 | Blob::hashed for the matching borsh fixture |
+| `hash/model/blob_transaction.bin` | `hyli_model::BlobTransaction` | 32 | BlobTransaction::hashed for the matching borsh fixture |
 | `hash/model/data_proposal_empty.bin` | `hyli_model::DataProposal` | 32 | DataProposal::hashed for the empty-tx case |
+| `hash/model/proof_data.bin` | `hyli_model::ProofData` | 32 | ProofData::hashed for [0x42; 16] |
+| `hash/model/proof_transaction.bin` | `hyli_model::ProofTransaction` | 32 | ProofTransaction::hashed |
 | `hash/model/register_contract_action.bin` | `hyli_model::RegisterContractAction` | 32 | RegisterContractAction::hashed (constructor_metadata excluded) |
+| `hash/model/verified_proof_transaction.bin` | `hyli_model::VerifiedProofTransaction` | 32 | VerifiedProofTransaction::hashed |
 | `hash/primitives/sha3_256_empty.bin` | `sha3::Sha3_256` | 32 | SHA3-256 of empty input |

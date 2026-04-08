@@ -90,6 +90,102 @@ pub const DataProposalParent = union(enum) {
     dp: DataProposalHash,
 };
 
+/// `hyli_model::ProofData` (`ProofData(pub Vec<u8>)`).
+pub const ProofData = struct {
+    bytes: []const u8,
+};
+
+/// `hyli_model::ProofDataHash` (`ProofDataHash(pub Vec<u8>)`).
+pub const ProofDataHash = struct {
+    bytes: []const u8,
+};
+
+/// `hyli_model::TxHash` (`TxHash(pub Vec<u8>)`).
+pub const TxHash = struct {
+    bytes: []const u8,
+};
+
+/// `hyli_model::Signature` — opaque BLS signature bytes (`Vec<u8>`).
+pub const Signature = struct {
+    bytes: []const u8,
+};
+
+/// `hyli_model::ValidatorSignature` — `{ signature, validator }`.
+pub const ValidatorSignature = struct {
+    signature: Signature,
+    validator: ValidatorPublicKey,
+};
+
+/// `hyli_model::AggregateSignature`.
+pub const AggregateSignature = struct {
+    signature: Signature,
+    validators: []const ValidatorPublicKey,
+};
+
+/// `hyli_model::Signed<T, V>` envelope. Generic over the inner message and
+/// the signature wrapper. Field order matches the Rust definition exactly.
+pub fn Signed(comptime Msg: type, comptime Sig: type) type {
+    return struct {
+        msg: Msg,
+        signature: Sig,
+    };
+}
+
+/// `hyli_model::ValidatorCandidacy`.
+pub const ValidatorCandidacy = struct {
+    peer_address: []const u8,
+};
+
+/// `hyli_model::BlobTransaction`. The `hash_cache` and `blobshash_cache`
+/// fields on the Rust side are `#[borsh(skip)]` and absent from the wire,
+/// so the Zig mirror only carries identity + blobs.
+pub const BlobTransaction = struct {
+    identity: Identity,
+    blobs: []const Blob,
+};
+
+/// `hyli_model::ProofTransaction`.
+pub const ProofTransaction = struct {
+    contract_name: ContractName,
+    program_id: ProgramId,
+    verifier: Verifier,
+    proof: ProofData,
+};
+
+/// `hyli_model::VerifiedProofTransaction`.
+pub const VerifiedProofTransaction = struct {
+    contract_name: ContractName,
+    program_id: ProgramId,
+    verifier: Verifier,
+    proof: ?ProofData,
+    proof_hash: ProofDataHash,
+    /// Borsh in Rust serializes `usize` as a fixed `u64`.
+    proof_size: u64,
+    proven_blobs: []const BlobProofOutput,
+    is_recursive: bool,
+};
+
+/// Placeholder for the `BlobProofOutput` type — Hyli definition is in
+/// `verifiers.rs`. Until we need a concrete shape, we accept any byte buffer
+/// so callers can keep the slice empty in fixtures that don't exercise it.
+pub const BlobProofOutput = struct {
+    bytes: []const u8,
+};
+
+/// `hyli_model::TransactionData` enum — Borsh discriminants follow the
+/// declaration order: Blob, Proof, VerifiedProof.
+pub const TransactionData = union(enum) {
+    blob: BlobTransaction,
+    proof: ProofTransaction,
+    verified_proof: VerifiedProofTransaction,
+};
+
+/// `hyli_model::Transaction`.
+pub const Transaction = struct {
+    version: u32,
+    transaction_data: TransactionData,
+};
+
 test "type sizes are platform-stable where it matters" {
     // BlockHeight is u64, not usize.
     try std.testing.expectEqual(@as(usize, 8), @sizeOf(u64));

@@ -9,8 +9,10 @@
 
 pub const borsh = struct {
     pub const model = struct {
+        pub const aggregate_signature_2: []const u8 = @embedFile("corpus/borsh/model/aggregate_signature_2.bin");
         pub const blob_index_3: []const u8 = @embedFile("corpus/borsh/model/blob_index_3.bin");
         pub const blob_simple: []const u8 = @embedFile("corpus/borsh/model/blob_simple.bin");
+        pub const blob_transaction: []const u8 = @embedFile("corpus/borsh/model/blob_transaction.bin");
         pub const block_height_42: []const u8 = @embedFile("corpus/borsh/model/block_height_42.bin");
         pub const contract_name_hyli: []const u8 = @embedFile("corpus/borsh/model/contract_name_hyli.bin");
         pub const data_proposal_empty: []const u8 = @embedFile("corpus/borsh/model/data_proposal_empty.bin");
@@ -19,12 +21,21 @@ pub const borsh = struct {
         pub const identity_alice: []const u8 = @embedFile("corpus/borsh/model/identity_alice.bin");
         pub const lane_id_default: []const u8 = @embedFile("corpus/borsh/model/lane_id_default.bin");
         pub const program_id_4_bytes: []const u8 = @embedFile("corpus/borsh/model/program_id_4_bytes.bin");
+        pub const proof_transaction: []const u8 = @embedFile("corpus/borsh/model/proof_transaction.bin");
         pub const register_contract_action: []const u8 = @embedFile("corpus/borsh/model/register_contract_action.bin");
+        pub const signature_8_bytes: []const u8 = @embedFile("corpus/borsh/model/signature_8_bytes.bin");
+        pub const signed_validator_candidacy: []const u8 = @embedFile("corpus/borsh/model/signed_validator_candidacy.bin");
         pub const state_commitment_4_bytes: []const u8 = @embedFile("corpus/borsh/model/state_commitment_4_bytes.bin");
         pub const timeout_window_default: []const u8 = @embedFile("corpus/borsh/model/timeout_window_default.bin");
         pub const timeout_window_no_timeout: []const u8 = @embedFile("corpus/borsh/model/timeout_window_no_timeout.bin");
         pub const timestamp_ms_max_u64: []const u8 = @embedFile("corpus/borsh/model/timestamp_ms_max_u64.bin");
         pub const timestamp_ms_unix_epoch: []const u8 = @embedFile("corpus/borsh/model/timestamp_ms_unix_epoch.bin");
+        pub const transaction_blob: []const u8 = @embedFile("corpus/borsh/model/transaction_blob.bin");
+        pub const transaction_proof: []const u8 = @embedFile("corpus/borsh/model/transaction_proof.bin");
+        pub const validator_candidacy: []const u8 = @embedFile("corpus/borsh/model/validator_candidacy.bin");
+        pub const validator_public_key: []const u8 = @embedFile("corpus/borsh/model/validator_public_key.bin");
+        pub const validator_signature: []const u8 = @embedFile("corpus/borsh/model/validator_signature.bin");
+        pub const verified_proof_transaction: []const u8 = @embedFile("corpus/borsh/model/verified_proof_transaction.bin");
         pub const verifier_risc0: []const u8 = @embedFile("corpus/borsh/model/verifier_risc0.bin");
     };
     pub const primitives = struct {
@@ -45,8 +56,12 @@ pub const borsh = struct {
 pub const hash = struct {
     pub const model = struct {
         pub const blob_simple: []const u8 = @embedFile("corpus/hash/model/blob_simple.bin");
+        pub const blob_transaction: []const u8 = @embedFile("corpus/hash/model/blob_transaction.bin");
         pub const data_proposal_empty: []const u8 = @embedFile("corpus/hash/model/data_proposal_empty.bin");
+        pub const proof_data: []const u8 = @embedFile("corpus/hash/model/proof_data.bin");
+        pub const proof_transaction: []const u8 = @embedFile("corpus/hash/model/proof_transaction.bin");
         pub const register_contract_action: []const u8 = @embedFile("corpus/hash/model/register_contract_action.bin");
+        pub const verified_proof_transaction: []const u8 = @embedFile("corpus/hash/model/verified_proof_transaction.bin");
     };
     pub const primitives = struct {
         pub const sha3_256_empty: []const u8 = @embedFile("corpus/hash/primitives/sha3_256_empty.bin");

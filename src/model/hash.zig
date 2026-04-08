@@ -127,6 +127,57 @@ pub fn registerContractActionHashed(input: *const RegisterContractActionInput) D
     return h.finalize();
 }
 
+/// `hyli_model::ProofData::hashed` (`sha3_256(self.0)`).
+pub fn proofDataHashed(proof: *const types.ProofData) Digest32 {
+    return sha3_256(proof.bytes);
+}
+
+/// `hyli_model::BlobTransaction::hashed`.
+///
+/// Update order:
+/// 1. `identity.as_bytes()` (no length prefix)
+/// 2. for each blob: `blob.hashed()` (the SHA3-256 of contract_name‖data)
+pub fn blobTransactionHashed(tx: *const types.BlobTransaction) Digest32 {
+    var h = Hasher.init();
+    h.update(tx.identity.value);
+    for (tx.blobs) |*blob| {
+        const blob_hash = blobHashed(blob);
+        h.update(&blob_hash);
+    }
+    return h.finalize();
+}
+
+/// `hyli_model::ProofTransaction::hashed`.
+///
+/// Update order:
+/// 1. `contract_name.as_bytes()`
+/// 2. `program_id`
+/// 3. `verifier.as_bytes()`
+/// 4. `proof.hashed().0` — i.e. SHA3-256 of the raw proof bytes.
+pub fn proofTransactionHashed(tx: *const types.ProofTransaction) Digest32 {
+    var h = Hasher.init();
+    h.update(tx.contract_name.value);
+    h.update(tx.program_id.bytes);
+    h.update(tx.verifier.value);
+    const proof_hash = proofDataHashed(&tx.proof);
+    h.update(&proof_hash);
+    return h.finalize();
+}
+
+/// `hyli_model::VerifiedProofTransaction::hashed`.
+///
+/// Same field order as `ProofTransaction::hashed` but the proof digest
+/// comes pre-computed on the struct (`proof_hash`) so we don't need the
+/// raw proof bytes.
+pub fn verifiedProofTransactionHashed(tx: *const types.VerifiedProofTransaction) Digest32 {
+    var h = Hasher.init();
+    h.update(tx.contract_name.value);
+    h.update(tx.program_id.bytes);
+    h.update(tx.verifier.value);
+    h.update(tx.proof_hash.bytes);
+    return h.finalize();
+}
+
 /// `hyli_model::DataProposal::hashed` from `crates/hyli-model/src/node/mempool.rs`.
 ///
 /// Update order:
@@ -211,4 +262,61 @@ test "DataProposal::hashed matches Rust fixture (DP variant, empty txs)" {
     };
     const got = dataProposalHashed(parent, &[_]Digest32{});
     try testing.expectEqualSlices(u8, corpus.hash.model.data_proposal_empty, &got);
+}
+
+test "ProofData::hashed matches Rust fixture" {
+    const proof: types.ProofData = .{ .bytes = &[_]u8{0x42} ** 16 };
+    const got = proofDataHashed(&proof);
+    try testing.expectEqualSlices(u8, corpus.hash.model.proof_data, &got);
+}
+
+test "BlobTransaction::hashed matches Rust fixture" {
+    const blobs = &[_]types.Blob{
+        .{
+            .contract_name = .{ .value = "hyli" },
+            .data = .{ .bytes = &[_]u8{ 0xaa, 0xbb } },
+        },
+        .{
+            .contract_name = .{ .value = "counter" },
+            .data = .{ .bytes = &[_]u8{ 0x01, 0x02, 0x03, 0x04 } },
+        },
+    };
+    const tx: types.BlobTransaction = .{
+        .identity = .{ .value = "alice@hyli" },
+        .blobs = blobs,
+    };
+    const got = blobTransactionHashed(&tx);
+    try testing.expectEqualSlices(u8, corpus.hash.model.blob_transaction, &got);
+}
+
+test "ProofTransaction::hashed matches Rust fixture" {
+    const tx: types.ProofTransaction = .{
+        .contract_name = .{ .value = "counter" },
+        .program_id = .{ .bytes = &[_]u8{ 0xde, 0xad } },
+        .verifier = .{ .value = "risc0" },
+        .proof = .{ .bytes = &[_]u8{0x42} ** 16 },
+    };
+    const got = proofTransactionHashed(&tx);
+    try testing.expectEqualSlices(u8, corpus.hash.model.proof_transaction, &got);
+}
+
+test "VerifiedProofTransaction::hashed matches ProofTransaction::hashed" {
+    // Both hashes feed contract_name‖program_id‖verifier‖proof_hash, so the
+    // resulting digest must be identical to the matching ProofTransaction
+    // fixture even though the wire shapes differ.
+    const proof = sha3_256(&[_]u8{0x42} ** 16);
+    const tx: types.VerifiedProofTransaction = .{
+        .contract_name = .{ .value = "counter" },
+        .program_id = .{ .bytes = &[_]u8{ 0xde, 0xad } },
+        .verifier = .{ .value = "risc0" },
+        .proof = null,
+        .proof_hash = .{ .bytes = &proof },
+        .proof_size = 16,
+        .proven_blobs = &[_]types.BlobProofOutput{},
+        .is_recursive = false,
+    };
+    const got = verifiedProofTransactionHashed(&tx);
+    try testing.expectEqualSlices(u8, corpus.hash.model.verified_proof_transaction, &got);
+    // Sanity: the two TX-hash variants must agree.
+    try testing.expectEqualSlices(u8, corpus.hash.model.proof_transaction, &got);
 }
