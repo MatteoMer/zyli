@@ -17,6 +17,7 @@
 pub const signable = @import("signable.zig");
 pub const zolt_arith = @import("zolt_arith");
 pub const zolt_arith_adapter = @import("zolt_arith_adapter.zig");
+pub const bls = @import("bls.zig");
 
 test {
     _ = signable;
@@ -26,4 +27,5 @@ test {
     // only run when you `cd ../zolt-arith && zig build test` directly.
     _ = zolt_arith.bigint;
     _ = zolt_arith_adapter;
+    _ = bls;
 }

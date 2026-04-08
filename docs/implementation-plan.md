@@ -24,6 +24,7 @@ In parallel, `zolt-arith` should become the reusable Zig arithmetic and cryptogr
 - Runtime minimalism. Zyli does not need a Tokio clone. It needs sockets, timers, bounded queues, cancellation, supervised subprocesses, and a small amount of structured concurrency.
 - Reuse with discipline. `zolt-arith` should be the home for reusable arithmetic and cryptography, but its public surface should still be driven by real Hyli requirements, not by speculative library design.
 - External proof systems stay external. SP1, RISC0, Jolt, and similar verifiers should remain in their native implementation languages behind narrow process boundaries.
+- Use Zig capabilities. Zig source code is in ../zig if needed
 
 ## What Hyli Actually Looks Like
 
