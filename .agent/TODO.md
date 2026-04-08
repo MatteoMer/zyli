@@ -23,7 +23,7 @@ Still missing for full BLS verification:
 - BLS verify entry point
 - Subgroup membership checks for hostile inputs
 
-**176 tests passing in zyli, 158 in zolt-arith (334 total). 127 fixtures.**
+**177 tests passing in zyli, 171 in zolt-arith (348 total). 127 fixtures.**
 
 - `build.zig` / `build.zig.zon` set up; library + executable build cleanly.
 - Borsh codec in `src/model/borsh.zig` covers primitives, options, slices,
@@ -181,9 +181,20 @@ Still missing for full BLS verification:
     (because BLS12-381's prime is `p ≡ 3 mod 4`); the Fp12
     conjugation is what the easy part of the final exponentiation
     uses to avoid a full `p^6` powering.
-  - `bls12_381.fp2Pow`: square-and-multiply over a generic-width
-    limb exponent. Used to compute Frobenius coefficients without
-    hand-typed tables.
+  - `bls12_381.fp2Pow` / `bls12_381.Fp6.pow` / `bls12_381.Fp12.pow`:
+    square-and-multiply over a generic-width limb exponent. Slow
+    fallback paths for the optimized Frobenius-based versions to
+    validate against, plus a way to compute Frobenius coefficients
+    at runtime without hand-typed tables.
+  - `bls12_381.fp6Frobenius` / `bls12_381.fp12Frobenius` /
+    `bls12_381.fp12FrobeniusSquared`: full BLS12-381 Frobenius
+    chain on Fp6 and Fp12 using comptime-derived (p-1)/3 and (p-1)/6
+    exponents. Cross-checked against the slow `Fp6.pow(a, p)` and
+    `Fp12.pow(a, p)` baselines.
+  - `bls12_381.fp12FinalExpEasy`: the easy part of the BLS12-381
+    final exponentiation, `f^((p^6 - 1)(p^2 + 1))`. Validated by
+    checking that the result lives in the cyclotomic subgroup
+    (`conjugate(g) · g = 1`).
   - `bls12_381.fpFromBytes64Be` / `bls12_381.FP_2_TO_256`: reduce a
     64-byte big-endian integer modulo `p`. Both halves are < 2^256
     < p, so the reduction collapses to one Fp mul + one Fp add.
@@ -224,21 +235,22 @@ Still missing for full BLS verification:
 
 ## Immediate
 
-- Compute the BLS12-381 Frobenius coefficients for Fp6 / Fp12 at
-  comptime via `fp2Pow`, then add `Fp6.frobenius` /
-  `Fp12.frobenius` / `Fp12.frobeniusSquared`. These power the easy
-  part of the final exponentiation.
+- Add the optimal Ate Miller loop for BLS12-381. The doubling and
+  addition steps run on `G2Projective` and produce both the new
+  G2 point and a sparse `Fp12` line value evaluated at the G1
+  point. The line has at most 3 non-zero `Fp2` coefficients (the
+  M-twist embedding fits in three positions of `Fp12`); a
+  specialized "mul by sparse line" can replace full `Fp12.mul` once
+  the simple version is correct.
+- Add the hard part of the final exponentiation:
+  `f^((p^4 - p^2 + 1) / r)`, expressed via an addition chain over
+  the BLS x parameter and cyclotomic squarings.
 - Add the SSWU map for Fp2 → an isogenous curve E', then the
   11-isogeny push from E' to BLS12-381 G2. This is the third stage
   of hash-to-curve.
 - Add G2 cofactor clearing (multiply by `h_eff` from the IETF
   pairing-friendly-curves draft). The new `G2Projective.mul` is now
   fast enough to handle the ~636-bit cofactor.
-- Add the optimal Ate pairing for BLS12-381 (Miller loop with line
-  function evaluation, then final exponentiation in Fp12). This is
-  the largest single piece of work remaining in Phase 2 — hundreds
-  of lines of careful code, but every primitive it needs is now in
-  place.
 - Add a `bls.verify(pk, msg, sig)` entry point that ties everything
   together: hash msg → G2, then check `e(pk, H(msg)) == e(g1, sig)`.
 - Wire that verifier into a `crypto/bls.zig` module in zyli.
