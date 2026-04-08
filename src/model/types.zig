@@ -231,6 +231,184 @@ pub const ConsensusProposal = struct {
     timestamp: TimestampMs,
 };
 
+/// `hyli_model::BlockHash` is a type alias for `ConsensusProposalHash`.
+pub const BlockHash = ConsensusProposalHash;
+
+/// `hyli_model::BlobHash` (`BlobHash(pub Vec<u8>)`).
+pub const BlobHash = struct {
+    bytes: []const u8,
+};
+
+/// One entry of a `BlobsHashes` map. Used as the underlying element of the
+/// `BTreeMap<BlobIndex, BlobHash>` storage so the Zig encoder can keep the
+/// map ordered without depending on a generic associative container.
+pub const BlobsHashesEntry = struct {
+    index: BlobIndex,
+    hash: BlobHash,
+};
+
+/// `hyli_model::BlobsHashes`. Borsh encodes the underlying `BTreeMap` as a
+/// `u32` length followed by `(key, value)` pairs in ascending key order.
+/// We model that with a sorted slice and pin "callers must sort by index"
+/// as the contract — see `borsh.zig` for the encoder.
+pub const BlobsHashes = struct {
+    /// Entries MUST be sorted by `index` in ascending order. The encoder
+    /// asserts this on debug builds; the decoder restores the same
+    /// invariant.
+    hashes: []const BlobsHashesEntry,
+};
+
+/// `hyli_model::IndexedBlobs` (`IndexedBlobs(pub Vec<(BlobIndex, Blob)>)`).
+/// Tuple `(BlobIndex, Blob)` encodes positionally so a Zig struct with the
+/// same field order produces identical bytes.
+pub const IndexedBlobEntry = struct {
+    index: BlobIndex,
+    blob: Blob,
+};
+
+pub const IndexedBlobs = struct {
+    blobs: []const IndexedBlobEntry,
+};
+
+/// `hyli_model::TxContext` from `crates/hyli-model/src/contract.rs`.
+pub const TxContext = struct {
+    lane_id: LaneId,
+    block_hash: BlockHash,
+    block_height: BlockHeight,
+    timestamp: TimestampMs,
+    chain_id: u128,
+};
+
+/// `hyli_model::Calldata`. Field order matches contract.rs exactly.
+pub const Calldata = struct {
+    tx_hash: TxHash,
+    identity: Identity,
+    blobs: IndexedBlobs,
+    /// Borsh in Rust serializes `usize` as a fixed `u64`.
+    tx_blob_count: u64,
+    index: BlobIndex,
+    tx_ctx: ?TxContext,
+    private_input: []const u8,
+};
+
+/// `hyli_model::TimeoutWindow` enum. Variant order: `NoTimeout`, then
+/// `Timeout { hard, soft }`. Borsh discriminants are positional.
+pub const TimeoutWindow = union(enum) {
+    no_timeout,
+    timeout: struct {
+        hard_timeout: BlockHeight,
+        soft_timeout: BlockHeight,
+    },
+};
+
+/// `hyli_model::RegisterContractEffect` from contract.rs.
+pub const RegisterContractEffect = struct {
+    verifier: Verifier,
+    program_id: ProgramId,
+    state_commitment: StateCommitment,
+    contract_name: ContractName,
+    timeout_window: ?TimeoutWindow,
+};
+
+/// Helper struct for the two `OnchainEffect` variants whose payload is a
+/// 2-tuple of named values. Borsh encodes a tuple positionally with no
+/// envelope, so this struct is wire-equivalent to `(ContractName, ProgramId)`.
+pub const ContractNameAndProgramId = struct {
+    contract_name: ContractName,
+    program_id: ProgramId,
+};
+
+pub const ContractNameAndTimeoutWindow = struct {
+    contract_name: ContractName,
+    timeout_window: TimeoutWindow,
+};
+
+/// `hyli_model::OnchainEffect` enum.
+///
+/// Variant order from contract.rs:
+///   0. RegisterContractWithConstructor(RegisterContractEffect)
+///   1. RegisterContract(RegisterContractEffect)
+///   2. DeleteContract(ContractName)
+///   3. UpdateContractProgramId(ContractName, ProgramId)
+///   4. UpdateTimeoutWindow(ContractName, TimeoutWindow)
+pub const OnchainEffect = union(enum) {
+    register_contract_with_constructor: RegisterContractEffect,
+    register_contract: RegisterContractEffect,
+    delete_contract: ContractName,
+    update_contract_program_id: ContractNameAndProgramId,
+    update_timeout_window: ContractNameAndTimeoutWindow,
+};
+
+/// One `(ContractName, StateCommitment)` entry of `HyliOutput::state_reads`.
+pub const StateRead = struct {
+    contract_name: ContractName,
+    state_commitment: StateCommitment,
+};
+
+/// `hyli_model::HyliOutput` from contract.rs.
+pub const HyliOutput = struct {
+    version: u32,
+    initial_state: StateCommitment,
+    next_state: StateCommitment,
+    identity: Identity,
+    index: BlobIndex,
+    blobs: IndexedBlobs,
+    /// Borsh in Rust serializes `usize` as a fixed `u64`.
+    tx_blob_count: u64,
+    tx_hash: TxHash,
+    success: bool,
+    state_reads: []const StateRead,
+    tx_ctx: ?TxContext,
+    onchain_effects: []const OnchainEffect,
+    program_outputs: []const u8,
+};
+
+// ---------------------------------------------------------------------------
+// Wire layer (hyli-net)
+// ---------------------------------------------------------------------------
+
+/// `hyli_net::tcp::Canal` (`Canal(pub String)`). Newtype around `String`,
+/// wire-identical to a single string.
+pub const Canal = struct {
+    name: []const u8,
+};
+
+/// `hyli_net::tcp::NodeConnectionData`. The struct that gets BLS-signed
+/// during the handshake.
+pub const NodeConnectionData = struct {
+    version: u16,
+    name: []const u8,
+    current_height: u64,
+    p2p_public_address: []const u8,
+    da_public_address: []const u8,
+    start_timestamp: TimestampMs,
+};
+
+/// Inner payload of both `Handshake::Hello` and `Handshake::Verack`. The
+/// Rust definition uses an unnamed 3-tuple; Borsh encodes tuples positionally
+/// with no envelope, so a Zig struct with the same field order is
+/// byte-identical on the wire.
+pub const HandshakePayload = struct {
+    canal: Canal,
+    signed_node_connection_data: Signed(NodeConnectionData, ValidatorSignature),
+    timestamp: TimestampMs,
+};
+
+/// `hyli_net::tcp::Handshake` enum. Variant order: Hello, Verack.
+pub const Handshake = union(enum) {
+    hello: HandshakePayload,
+    verack: HandshakePayload,
+};
+
+/// `hyli_net::tcp::P2PTcpMessage<Data>` envelope. Generic over the inner
+/// data payload type. Variant order: Handshake, Data.
+pub fn P2PTcpMessage(comptime Data: type) type {
+    return union(enum) {
+        handshake: Handshake,
+        data: Data,
+    };
+}
+
 test "type sizes are platform-stable where it matters" {
     // BlockHeight is u64, not usize.
     try std.testing.expectEqual(@as(usize, 8), @sizeOf(u64));

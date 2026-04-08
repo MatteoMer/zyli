@@ -2,20 +2,24 @@
 
 ## Status
 
-Phase 0 + early Phase 3 + first crack at Phase 4 wire layer.
-**85 tests passing.**
+Phase 0 corpus is broad; Phase 3 model + Phase 4 wire layer have closed
+the handshake/replay-path gap.
+**117 tests passing. 91 fixtures.**
 
 - `build.zig` / `build.zig.zon` set up; library + executable build cleanly.
 - Borsh codec in `src/model/borsh.zig` covers primitives, options, slices,
   fixed arrays, structs, payload-less enums, tagged unions, and the main
-  rejection cases.
+  rejection cases. `BlobsHashes` (BTreeMap-backed) is encoded via a
+  pre-sorted slice — the encoder relies on the caller having ordered
+  entries by key, mirroring the BTreeMap iteration contract on the Rust
+  side.
 - Compat harness scaffolded under `compat/`:
   - `compat/fixture-gen/` is a Rust binary pinned to `rustc 1.94` via
     `rust-toolchain.toml` and depends on `hyli-model` as a path dep with
     `features = ["std", "full"]`. Workspace inheritance is broken on
     purpose with an empty `[workspace]` table so the hyli MSRV doesn't
     leak.
-  - Running `cargo run` writes 47 fixtures into `compat/corpus/` and
+  - Running `cargo run` writes 91 fixtures into `compat/corpus/` and
     emits a Zig manifest at `compat/corpus.zig` that re-exports each
     fixture as an `@embedFile` constant.
   - `build.zig` exposes the manifest as a `corpus` import so test files
@@ -25,17 +29,22 @@ Phase 0 + early Phase 3 + first crack at Phase 4 wire layer.
   current corpus: leaf newtypes, `Blob`, `BlobTransaction`,
   `ProofTransaction`, `VerifiedProofTransaction`, `Transaction` (wraps
   the `TransactionData` enum), `Signed<Msg, Sig>`, `ValidatorSignature`,
-  `ValidatorCandidacy`, `AggregateSignature`, `DataProposalParent`.
+  `ValidatorCandidacy`, `AggregateSignature`, `DataProposalParent`,
+  `BlobsHashes`, `IndexedBlobs`, `TxContext`, `Calldata`,
+  `RegisterContractEffect`, `OnchainEffect`, `HyliOutput`, plus the
+  wire-layer `Canal`, `NodeConnectionData`, `HandshakePayload`,
+  `Handshake`, and `P2PTcpMessage<Data>`.
 - `src/model/compat_test.zig` round-trips every fixture through the Zig
   Borsh codec. The `BlobIndex` test pins down that Borsh emits `usize`
-  as 8 bytes; the `Signed<>` test pins down generic envelope ordering.
+  as 8 bytes; the `Signed<>` test pins down generic envelope ordering;
+  the `BlobsHashes` test pins down BTreeMap encoding.
 - `src/model/hash.zig` mirrors all Hyli SHA3-256 custom hashes that have
   fixtures: `Blob`, `RegisterContractAction`, `DataProposal`,
   `ProofData`, `BlobTransaction`, `ProofTransaction`,
-  `VerifiedProofTransaction`, and `ConsensusProposal` (custom field
-  selection: skips `LaneBytesSize` + `AggregateSignature` parts of each
-  cut entry, uses raw operator bytes for `LaneId::update_hasher` —
-  distinct from the hex projection used by `DataProposal::hashed`).
+  `VerifiedProofTransaction`, `ConsensusProposal`,
+  `RegisterContractEffect`, all `OnchainEffect` variants, and
+  `HyliOutput` (the field-by-field replay-path digest from
+  `data_availability.rs`, with `usize` always emitted as 8 bytes).
 - `Box<T>` transparency on the wire is asserted at fixture-generation
   time so a borsh regression in the Bond variant would fail the build
   before any Zig test runs.
@@ -43,38 +52,37 @@ Phase 0 + early Phase 3 + first crack at Phase 4 wire layer.
   `.agent/hyli-model-inventory.md` and drives the next batch of
   fixtures.
 - `src/wire/` exists with `framing.zig` (4-byte BE length-delimited
-  frames matching `tokio_util::LengthDelimitedCodec` defaults) and
+  frames matching `tokio_util::LengthDelimitedCodec` defaults),
   `tcp_message.zig` (the `TcpMessage::Ping`/`Data` shape from
-  `hyli_net::tcp`, including the `b"PING"` magic that bypasses borsh).
-  Both are validated against six `wire/messages/*` fixtures (PING +
-  TcpData with and without headers, framed and unframed). The framing
-  decoder is pull-based with explicit `need_more`/`frame` results so
-  it can be dropped over an `std.net.Stream` later without re-design.
+  `hyli_net::tcp`, including the `b"PING"` magic that bypasses borsh),
+  and `handshake.zig` (the `P2PTcpMessage<Data>` envelope plus
+  `Handshake::{Hello,Verack}` variants). The framing decoder is
+  pull-based with explicit `need_more`/`frame` results so it can be
+  dropped over an `std.net.Stream` later without re-design.
+- `src/crypto/signable.zig` pins the BLS DST string used by
+  `hyli-crypto::sign_msg` and exposes `signableBytesAlloc(Msg, msg)` —
+  the "what bytes get BLS-signed" rule (`borsh::to_vec(&msg)` for any
+  `Signed<T, V>`). The fixture-gen asserts at build time that the
+  signable payload equals the standalone borsh fixture, so a future
+  refactor that breaks the invariant fails the build immediately.
 
 ## Immediate
 
-- Add `P2PTcpMessage<Data>` envelope (Borsh enum: Handshake / Data) and
-  the `Handshake` shape (`Hello`/`Verack`, each carrying
-  `(Canal, SignedByValidator<NodeConnectionData>, TimestampMs)`) under
-  `zyli/wire`. This is what the observer needs to negotiate a
-  connection.
-- Add fixtures + Zig mirror for `Canal` and `NodeConnectionData`.
-- Add fixtures + Zig mirror for `Calldata`, `HyliOutput`, and
-  `OnchainEffect` (along with their hashes where they exist). Each is
-  consensus-critical for the replay path.
-- Decide how to encode `BTreeMap`-backed types (`BlobsHashes`) on the
-  Zig side — Borsh requires sorted-by-key bytes. Either provide a
-  wrapper type or assert callers pre-sort.
-- Add fixtures for the exact bytes that get BLS-signed for each network
-  message variant — this is the "signable payload" surface called out in
-  the plan and is what the wire layer will need to verify against.
 - Begin extracting reusable arithmetic from `../zolt` into `zolt-arith`
-  (`bigint`, `field`, `ec`, `msm`, `pairing`, `thread_pool`).
+  (`bigint`, `field`, `ec`, `msm`, `pairing`, `thread_pool`). This is
+  Phase 1 of the implementation plan and unblocks BLS12-381.
 - Add BLS12-381 field, curve, pairing, and aggregation support to
-  `zolt-arith`, with vectors borrowed from Rust Hyli / `blst`.
-- Implement signed message header verification once BLS12-381 lands.
+  `zolt-arith`, with vectors borrowed from Rust Hyli / `blst`. Phase 2.
+- Implement signed message header verification (BLS12-381 verify on
+  `signable.zig`'s output) once `zolt-arith` BLS lands.
 - Wire `framing.FrameDecoder` over a real `std.net.Stream` to make the
   observer attempt a live testnet connection.
+- Add fixtures for the rest of the consensus message family
+  (`Prepare`, `PrepareVote`, `Confirm`, `ConfirmAck`, `Commit`,
+  `Timeout`, `TimeoutCertificate`, `SyncRequest`, `SyncReply`) and the
+  matching mempool messages — all behind `Signed<...>` envelopes.
+- Add fixtures for `SignedBlock` and the DA stream messages so the
+  follower path has its own corpus before any code lands.
 
 ## Next
 

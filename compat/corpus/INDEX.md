@@ -6,11 +6,18 @@ Source: `hyli` git revision `e41899eb582d2d25d13a97a425ec76250484d45c`.
 
 | Path | Rust type | Bytes | Description |
 |------|-----------|-------|-------------|
+| `borsh/crypto/bls_min_pk_dst.bin` | `&[u8]` | 43 | BLS12-381 min_pk DST string used by hyli-crypto::sign_msg |
+| `borsh/crypto/signable_node_connection_data.bin` | `NodeConnectionData` | 77 | Signable bytes for SignedByValidator<NodeConnectionData> = borsh(msg) |
+| `borsh/crypto/signable_validator_candidacy.bin` | `ValidatorCandidacy` | 18 | Signable bytes for SignedByValidator<ValidatorCandidacy> = borsh(msg) |
 | `borsh/model/aggregate_signature_2.bin` | `hyli_model::AggregateSignature` | 36 | AggregateSignature with 2 validators |
 | `borsh/model/blob_index_3.bin` | `hyli_model::BlobIndex` | 8 | BlobIndex(3) — note: usize → u64 on the wire |
 | `borsh/model/blob_simple.bin` | `hyli_model::Blob` | 15 | Blob { contract_name="hyli", data=[1,2,3] } |
 | `borsh/model/blob_transaction.bin` | `hyli_model::BlobTransaction` | 51 | BlobTransaction(alice@hyli, [Blob(hyli,…), Blob(counter,…)]) |
+| `borsh/model/blobs_hashes_empty.bin` | `hyli_model::BlobsHashes` | 4 | BlobsHashes { hashes: {} } |
+| `borsh/model/blobs_hashes_two.bin` | `hyli_model::BlobsHashes` | 36 | BlobsHashes { 0 -> [0xaa;4], 1 -> [0xbb;4] } |
 | `borsh/model/block_height_42.bin` | `hyli_model::BlockHeight` | 8 | BlockHeight(42) |
+| `borsh/model/calldata.bin` | `hyli_model::Calldata` | 140 | Calldata for tx=alice@counter with one blob and tx_ctx=Some |
+| `borsh/model/canal_p2p.bin` | `hyli_net::tcp::Canal` | 7 | Canal("p2p") — newtype around String |
 | `borsh/model/consensus_proposal_empty.bin` | `hyli_model::ConsensusProposal` | 43 | ConsensusProposal { slot=1, cut=[], actions=[], ts=1234, parent=genesis } |
 | `borsh/model/consensus_proposal_full.bin` | `hyli_model::ConsensusProposal` | 135 | ConsensusProposal with one cut entry and one PayFeesForDaDi |
 | `borsh/model/consensus_staking_action_bond.bin` | `hyli_model::ConsensusStakingAction` | 39 | ConsensusStakingAction::Bond { candidate=SignedByValidator<ValidatorCandidacy> } |
@@ -19,13 +26,23 @@ Source: `hyli` git revision `e41899eb582d2d25d13a97a425ec76250484d45c`.
 | `borsh/model/data_proposal_empty.bin` | `hyli_model::DataProposal` | 15 | DataProposal::new(parent="parent", txs=[]) |
 | `borsh/model/data_proposal_parent_dp.bin` | `hyli_model::DataProposalParent` | 11 | DataProposalParent::DP("parent") |
 | `borsh/model/data_proposal_parent_lane_root.bin` | `hyli_model::DataProposalParent` | 16 | DataProposalParent::LaneRoot(LaneId::default()) |
+| `borsh/model/hyli_output.bin` | `hyli_model::HyliOutput` | 251 | HyliOutput for counter with one blob, one register effect, success=true |
 | `borsh/model/identity_alice.bin` | `hyli_model::Identity` | 14 | Identity("alice@hyli") |
 | `borsh/model/lane_bytes_size_4096.bin` | `hyli_model::LaneBytesSize` | 8 | LaneBytesSize(4096) |
 | `borsh/model/lane_id_default.bin` | `hyli_model::LaneId` | 15 | LaneId::default() |
+| `borsh/model/node_connection_data.bin` | `hyli_net::tcp::NodeConnectionData` | 77 | NodeConnectionData for validator-a, height=42 |
+| `borsh/model/onchain_effect_delete.bin` | `hyli_model::OnchainEffect` | 12 | OnchainEffect::DeleteContract("counter") |
+| `borsh/model/onchain_effect_register.bin` | `hyli_model::OnchainEffect` | 63 | OnchainEffect::RegisterContract(...) |
+| `borsh/model/onchain_effect_register_with_ctor.bin` | `hyli_model::OnchainEffect` | 63 | OnchainEffect::RegisterContractWithConstructor(...) |
+| `borsh/model/onchain_effect_update_program_id.bin` | `hyli_model::OnchainEffect` | 20 | OnchainEffect::UpdateContractProgramId("counter", [0xcc;4]) |
+| `borsh/model/onchain_effect_update_timeout_no.bin` | `hyli_model::OnchainEffect` | 13 | OnchainEffect::UpdateTimeoutWindow("counter", NoTimeout) |
+| `borsh/model/onchain_effect_update_timeout_yes.bin` | `hyli_model::OnchainEffect` | 29 | OnchainEffect::UpdateTimeoutWindow("counter", Timeout{100,200}) |
 | `borsh/model/program_id_4_bytes.bin` | `hyli_model::ProgramId` | 8 | ProgramId([0xde,0xad,0xbe,0xef]) |
 | `borsh/model/proof_transaction.bin` | `hyli_model::ProofTransaction` | 46 | ProofTransaction(counter, risc0, ProofData([0x42; 16])) |
 | `borsh/model/register_contract_action.bin` | `hyli_model::RegisterContractAction` | 71 | Sample RegisterContractAction with timeout + constructor metadata |
+| `borsh/model/register_contract_effect.bin` | `hyli_model::RegisterContractEffect` | 62 | RegisterContractEffect for counter w/ Some(timeout) |
 | `borsh/model/signature_8_bytes.bin` | `hyli_model::Signature` | 12 | Signature([0xff; 8]) |
+| `borsh/model/signed_node_connection_data.bin` | `Signed<NodeConnectionData, ValidatorSignature>` | 97 | SignedByValidator<NodeConnectionData> |
 | `borsh/model/signed_validator_candidacy.bin` | `hyli_model::Signed<ValidatorCandidacy, ValidatorSignature>` | 38 | SignedByValidator<ValidatorCandidacy> |
 | `borsh/model/state_commitment_4_bytes.bin` | `hyli_model::StateCommitment` | 8 | StateCommitment([0,1,2,3]) |
 | `borsh/model/timeout_window_default.bin` | `hyli_model::TimeoutWindow` | 17 | TimeoutWindow::Timeout { hard=100, soft=100 } |
@@ -34,6 +51,7 @@ Source: `hyli` git revision `e41899eb582d2d25d13a97a425ec76250484d45c`.
 | `borsh/model/timestamp_ms_unix_epoch.bin` | `hyli_model::TimestampMs` | 16 | TimestampMs(0) — sanity for u128 layout |
 | `borsh/model/transaction_blob.bin` | `hyli_model::Transaction` | 56 | Transaction { version=1, data=Blob(...) } |
 | `borsh/model/transaction_proof.bin` | `hyli_model::Transaction` | 51 | Transaction { version=1, data=Proof(...) } |
+| `borsh/model/tx_context.bin` | `hyli_model::TxContext` | 63 | TxContext { lane=default, block=[0x55;4], height=123, ts=456, chain_id=7 } |
 | `borsh/model/validator_candidacy.bin` | `hyli_model::ValidatorCandidacy` | 18 | ValidatorCandidacy { peer_address="127.0.0.1:4242" } |
 | `borsh/model/validator_public_key.bin` | `hyli_model::ValidatorPublicKey` | 8 | ValidatorPublicKey([0x01; 4]) |
 | `borsh/model/validator_signature.bin` | `hyli_model::ValidatorSignature` | 20 | ValidatorSignature { sig=[0xff;8], validator=[0x01;4] } |
@@ -55,11 +73,24 @@ Source: `hyli` git revision `e41899eb582d2d25d13a97a425ec76250484d45c`.
 | `hash/model/consensus_proposal_empty.bin` | `hyli_model::ConsensusProposal` | 32 | ConsensusProposal::hashed for the empty case |
 | `hash/model/consensus_proposal_full.bin` | `hyli_model::ConsensusProposal` | 32 | ConsensusProposal::hashed for the populated case |
 | `hash/model/data_proposal_empty.bin` | `hyli_model::DataProposal` | 32 | DataProposal::hashed for the empty-tx case |
+| `hash/model/hyli_output.bin` | `hyli_model::HyliOutput` | 32 | HyliOutput::hashed (custom field-by-field SHA3-256 over the struct) |
+| `hash/model/onchain_effect_delete.bin` | `hyli_model::OnchainEffect` | 32 | OnchainEffect::DeleteContract::hashed |
+| `hash/model/onchain_effect_register.bin` | `hyli_model::OnchainEffect` | 32 | OnchainEffect::RegisterContract::hashed |
+| `hash/model/onchain_effect_register_with_ctor.bin` | `hyli_model::OnchainEffect` | 32 | OnchainEffect::RegisterContractWithConstructor::hashed |
+| `hash/model/onchain_effect_update_program_id.bin` | `hyli_model::OnchainEffect` | 32 | OnchainEffect::UpdateContractProgramId::hashed |
+| `hash/model/onchain_effect_update_timeout_no.bin` | `hyli_model::OnchainEffect` | 32 | OnchainEffect::UpdateTimeoutWindow(NoTimeout)::hashed |
+| `hash/model/onchain_effect_update_timeout_yes.bin` | `hyli_model::OnchainEffect` | 32 | OnchainEffect::UpdateTimeoutWindow(Timeout)::hashed |
 | `hash/model/proof_data.bin` | `hyli_model::ProofData` | 32 | ProofData::hashed for [0x42; 16] |
 | `hash/model/proof_transaction.bin` | `hyli_model::ProofTransaction` | 32 | ProofTransaction::hashed |
 | `hash/model/register_contract_action.bin` | `hyli_model::RegisterContractAction` | 32 | RegisterContractAction::hashed (constructor_metadata excluded) |
+| `hash/model/register_contract_effect.bin` | `hyli_model::RegisterContractEffect` | 32 | RegisterContractEffect::hashed |
 | `hash/model/verified_proof_transaction.bin` | `hyli_model::VerifiedProofTransaction` | 32 | VerifiedProofTransaction::hashed |
 | `hash/primitives/sha3_256_empty.bin` | `sha3::Sha3_256` | 32 | SHA3-256 of empty input |
+| `wire/messages/handshake_hello_inner.bin` | `hyli_net::tcp::Handshake` | 121 | Handshake::Hello((Canal="p2p", SignedByValidator<NodeConnectionData>, ts)) |
+| `wire/messages/handshake_verack_inner.bin` | `hyli_net::tcp::Handshake` | 121 | Handshake::Verack((Canal="p2p", SignedByValidator<NodeConnectionData>, ts)) |
+| `wire/messages/p2p_message_data_inner.bin` | `hyli_net::tcp::P2PTcpMessage<Vec<u8>>` | 8 | P2PTcpMessage::Data(Vec<u8>([0xaa,0xbb,0xcc])) |
+| `wire/messages/p2p_message_handshake_hello_framed.bin` | `[u8]` | 126 | Framed P2PTcpMessage::Handshake(Hello(...)) |
+| `wire/messages/p2p_message_handshake_hello_inner.bin` | `hyli_net::tcp::P2PTcpMessage<_>` | 122 | P2PTcpMessage::Handshake(Handshake::Hello((Canal, signed, ts))) |
 | `wire/messages/tcp_message_data_header_framed.bin` | `[u8]` | 24 | Framed TcpData{headers=[(k,v)], payload=[0xaa,0xbb]} |
 | `wire/messages/tcp_message_data_header_inner.bin` | `TcpWireData` | 20 | TcpData{headers=[(k,v)], payload=[0xaa,0xbb]} |
 | `wire/messages/tcp_message_data_simple_framed.bin` | `[u8]` | 15 | Framed TcpData{headers=[], payload=[1,2,3]} |

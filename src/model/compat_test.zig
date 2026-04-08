@@ -422,6 +422,283 @@ test "fixture: ConsensusProposal (empty cut and staking_actions)" {
     );
 }
 
+// ---------------------------------------------------------------------------
+// Replay-path types
+// ---------------------------------------------------------------------------
+
+test "fixture: BlobsHashes (empty)" {
+    const value: types.BlobsHashes = .{
+        .hashes = &[_]types.BlobsHashesEntry{},
+    };
+    try expectMatchesFixture(types.BlobsHashes, value, corpus.borsh.model.blobs_hashes_empty);
+}
+
+test "fixture: BlobsHashes (two entries, sorted by index)" {
+    // BTreeMap iteration order is sorted by key Ord. The Zig encoder relies
+    // on the caller having pre-sorted the slice — passing entries in the
+    // wrong order would silently break wire compatibility.
+    const value: types.BlobsHashes = .{
+        .hashes = &[_]types.BlobsHashesEntry{
+            .{ .index = .{ .index = 0 }, .hash = .{ .bytes = &[_]u8{0xaa} ** 4 } },
+            .{ .index = .{ .index = 1 }, .hash = .{ .bytes = &[_]u8{0xbb} ** 4 } },
+        },
+    };
+    try expectMatchesFixture(types.BlobsHashes, value, corpus.borsh.model.blobs_hashes_two);
+}
+
+test "fixture: TxContext" {
+    const value: types.TxContext = .{
+        .lane_id = .{
+            .operator = .{ .bytes = &[_]u8{} },
+            .suffix = "default",
+        },
+        .block_hash = .{ .bytes = &[_]u8{0x55} ** 4 },
+        .block_height = .{ .height = 123 },
+        .timestamp = .{ .millis = 456 },
+        .chain_id = 7,
+    };
+    try expectMatchesFixture(types.TxContext, value, corpus.borsh.model.tx_context);
+}
+
+test "fixture: Calldata" {
+    const blobs = &[_]types.IndexedBlobEntry{
+        .{
+            .index = .{ .index = 0 },
+            .blob = .{
+                .contract_name = .{ .value = "counter" },
+                .data = .{ .bytes = &[_]u8{ 0x10, 0x11 } },
+            },
+        },
+    };
+    const tx_ctx: types.TxContext = .{
+        .lane_id = .{
+            .operator = .{ .bytes = &[_]u8{} },
+            .suffix = "default",
+        },
+        .block_hash = .{ .bytes = &[_]u8{0x55} ** 4 },
+        .block_height = .{ .height = 123 },
+        .timestamp = .{ .millis = 456 },
+        .chain_id = 7,
+    };
+    const value: types.Calldata = .{
+        .tx_hash = .{ .bytes = &[_]u8{0x77} ** 4 },
+        .identity = .{ .value = "alice@counter" },
+        .blobs = .{ .blobs = blobs },
+        .tx_blob_count = 1,
+        .index = .{ .index = 0 },
+        .tx_ctx = tx_ctx,
+        .private_input = &[_]u8{ 0xfe, 0xed },
+    };
+    try expectMatchesFixture(types.Calldata, value, corpus.borsh.model.calldata);
+}
+
+test "fixture: RegisterContractEffect" {
+    const value: types.RegisterContractEffect = .{
+        .verifier = .{ .value = "risc0" },
+        .program_id = .{ .bytes = &[_]u8{0xaa} ** 8 },
+        .state_commitment = .{ .bytes = &[_]u8{0xbb} ** 8 },
+        .contract_name = .{ .value = "counter" },
+        .timeout_window = .{ .timeout = .{
+            .hard_timeout = .{ .height = 50 },
+            .soft_timeout = .{ .height = 100 },
+        } },
+    };
+    try expectMatchesFixture(
+        types.RegisterContractEffect,
+        value,
+        corpus.borsh.model.register_contract_effect,
+    );
+}
+
+fn sampleRegisterContractEffect() types.RegisterContractEffect {
+    return .{
+        .verifier = .{ .value = "risc0" },
+        .program_id = .{ .bytes = &[_]u8{0xaa} ** 8 },
+        .state_commitment = .{ .bytes = &[_]u8{0xbb} ** 8 },
+        .contract_name = .{ .value = "counter" },
+        .timeout_window = .{ .timeout = .{
+            .hard_timeout = .{ .height = 50 },
+            .soft_timeout = .{ .height = 100 },
+        } },
+    };
+}
+
+test "fixture: OnchainEffect::RegisterContractWithConstructor" {
+    const value: types.OnchainEffect = .{
+        .register_contract_with_constructor = sampleRegisterContractEffect(),
+    };
+    try expectMatchesFixture(
+        types.OnchainEffect,
+        value,
+        corpus.borsh.model.onchain_effect_register_with_ctor,
+    );
+}
+
+test "fixture: OnchainEffect::RegisterContract" {
+    const value: types.OnchainEffect = .{
+        .register_contract = sampleRegisterContractEffect(),
+    };
+    try expectMatchesFixture(
+        types.OnchainEffect,
+        value,
+        corpus.borsh.model.onchain_effect_register,
+    );
+}
+
+test "fixture: OnchainEffect::DeleteContract" {
+    const value: types.OnchainEffect = .{
+        .delete_contract = .{ .value = "counter" },
+    };
+    try expectMatchesFixture(
+        types.OnchainEffect,
+        value,
+        corpus.borsh.model.onchain_effect_delete,
+    );
+}
+
+test "fixture: OnchainEffect::UpdateContractProgramId" {
+    const value: types.OnchainEffect = .{
+        .update_contract_program_id = .{
+            .contract_name = .{ .value = "counter" },
+            .program_id = .{ .bytes = &[_]u8{0xcc} ** 4 },
+        },
+    };
+    try expectMatchesFixture(
+        types.OnchainEffect,
+        value,
+        corpus.borsh.model.onchain_effect_update_program_id,
+    );
+}
+
+test "fixture: OnchainEffect::UpdateTimeoutWindow(NoTimeout)" {
+    const value: types.OnchainEffect = .{
+        .update_timeout_window = .{
+            .contract_name = .{ .value = "counter" },
+            .timeout_window = .no_timeout,
+        },
+    };
+    try expectMatchesFixture(
+        types.OnchainEffect,
+        value,
+        corpus.borsh.model.onchain_effect_update_timeout_no,
+    );
+}
+
+test "fixture: OnchainEffect::UpdateTimeoutWindow(Timeout{100,200})" {
+    const value: types.OnchainEffect = .{
+        .update_timeout_window = .{
+            .contract_name = .{ .value = "counter" },
+            .timeout_window = .{ .timeout = .{
+                .hard_timeout = .{ .height = 100 },
+                .soft_timeout = .{ .height = 200 },
+            } },
+        },
+    };
+    try expectMatchesFixture(
+        types.OnchainEffect,
+        value,
+        corpus.borsh.model.onchain_effect_update_timeout_yes,
+    );
+}
+
+test "fixture: HyliOutput" {
+    const blobs = &[_]types.IndexedBlobEntry{
+        .{
+            .index = .{ .index = 0 },
+            .blob = .{
+                .contract_name = .{ .value = "counter" },
+                .data = .{ .bytes = &[_]u8{ 0x10, 0x11 } },
+            },
+        },
+    };
+    const tx_ctx: types.TxContext = .{
+        .lane_id = .{
+            .operator = .{ .bytes = &[_]u8{} },
+            .suffix = "default",
+        },
+        .block_hash = .{ .bytes = &[_]u8{0x55} ** 4 },
+        .block_height = .{ .height = 123 },
+        .timestamp = .{ .millis = 456 },
+        .chain_id = 7,
+    };
+    const value: types.HyliOutput = .{
+        .version = 1,
+        .initial_state = .{ .bytes = &[_]u8{ 0x10, 0x11, 0x12, 0x13 } },
+        .next_state = .{ .bytes = &[_]u8{ 0x20, 0x21, 0x22, 0x23 } },
+        .identity = .{ .value = "alice@counter" },
+        .index = .{ .index = 0 },
+        .blobs = .{ .blobs = blobs },
+        .tx_blob_count = 1,
+        .tx_hash = .{ .bytes = &[_]u8{0x77} ** 4 },
+        .success = true,
+        .state_reads = &[_]types.StateRead{
+            .{
+                .contract_name = .{ .value = "counter" },
+                .state_commitment = .{ .bytes = &[_]u8{ 0x10, 0x11, 0x12, 0x13 } },
+            },
+        },
+        .tx_ctx = tx_ctx,
+        .onchain_effects = &[_]types.OnchainEffect{
+            .{ .register_contract = sampleRegisterContractEffect() },
+        },
+        .program_outputs = &[_]u8{ 0xab, 0xcd },
+    };
+    try expectMatchesFixture(types.HyliOutput, value, corpus.borsh.model.hyli_output);
+}
+
+// ---------------------------------------------------------------------------
+// Wire layer types — Canal, NodeConnectionData, and the signed envelope.
+// The handshake / P2PTcpMessage envelopes themselves are validated in
+// `src/wire/handshake.zig`, so this section only covers the model
+// dependencies they pull in.
+// ---------------------------------------------------------------------------
+
+fn sampleNodeConnectionData() types.NodeConnectionData {
+    return .{
+        .version = 1,
+        .name = "validator-a",
+        .current_height = 42,
+        .p2p_public_address = "127.0.0.1:4242",
+        .da_public_address = "127.0.0.1:4243",
+        .start_timestamp = .{ .millis = 1_700_000_000_000 },
+    };
+}
+
+fn sampleSignedNodeConnectionData() types.Signed(types.NodeConnectionData, types.ValidatorSignature) {
+    return .{
+        .msg = sampleNodeConnectionData(),
+        .signature = .{
+            .signature = .{ .bytes = &[_]u8{0xff} ** 8 },
+            .validator = .{ .bytes = &[_]u8{0x01} ** 4 },
+        },
+    };
+}
+
+test "fixture: Canal(\"p2p\")" {
+    try expectMatchesFixture(
+        types.Canal,
+        .{ .name = "p2p" },
+        corpus.borsh.model.canal_p2p,
+    );
+}
+
+test "fixture: NodeConnectionData" {
+    try expectMatchesFixture(
+        types.NodeConnectionData,
+        sampleNodeConnectionData(),
+        corpus.borsh.model.node_connection_data,
+    );
+}
+
+test "fixture: SignedByValidator<NodeConnectionData>" {
+    const SignedT = types.Signed(types.NodeConnectionData, types.ValidatorSignature);
+    try expectMatchesFixture(
+        SignedT,
+        sampleSignedNodeConnectionData(),
+        corpus.borsh.model.signed_node_connection_data,
+    );
+}
+
 test "fixture: ConsensusProposal (one cut entry, one PayFeesForDaDi)" {
     const lane: types.LaneId = .{
         .operator = .{ .bytes = &[_]u8{0x01} ** 4 },

@@ -228,6 +228,114 @@ pub fn consensusProposalHashed(cp: *const types.ConsensusProposal) Digest32 {
     return h.finalize();
 }
 
+/// `hyli_model::RegisterContractEffect::hashed` from contract.rs.
+///
+/// Same construction as `RegisterContractAction::hashed`: feed the verifier
+/// bytes, the program_id bytes, the state commitment bytes, and the
+/// contract name bytes (no length prefixes), then optionally the timeout
+/// window. The two structs only diverge on the wire (RegisterContractAction
+/// has an extra `constructor_metadata` field that is excluded from the
+/// hash anyway), so the digest of structurally-equivalent values is
+/// identical.
+pub fn registerContractEffectHashed(effect: *const types.RegisterContractEffect) Digest32 {
+    var h = Hasher.init();
+    h.update(effect.verifier.value);
+    h.update(effect.program_id.bytes);
+    h.update(effect.state_commitment.bytes);
+    h.update(effect.contract_name.value);
+    if (effect.timeout_window) |tw| {
+        switch (tw) {
+            .no_timeout => h.update(&[_]u8{0}),
+            .timeout => |t| {
+                h.updateLeInt(u64, t.hard_timeout.height);
+                h.updateLeInt(u64, t.soft_timeout.height);
+            },
+        }
+    }
+    return h.finalize();
+}
+
+/// `hyli_model::OnchainEffect::hashed` from contract.rs.
+///
+/// Per-variant update rules:
+/// - `RegisterContractWithConstructor(e)` → `e.hashed().0`
+/// - `RegisterContract(e)`               → `e.hashed().0`
+/// - `DeleteContract(name)`              → `name.0.as_bytes()`
+/// - `UpdateContractProgramId(name,pid)` → `name.0.as_bytes() ‖ pid.0`
+/// - `UpdateTimeoutWindow(name, tw)`     → `name.0.as_bytes() ‖
+///       (NoTimeout: 0u8 / Timeout: hard_le ‖ soft_le)`
+pub fn onchainEffectHashed(effect: *const types.OnchainEffect) Digest32 {
+    var h = Hasher.init();
+    switch (effect.*) {
+        .register_contract_with_constructor => |e| {
+            const inner = registerContractEffectHashed(&e);
+            h.update(&inner);
+        },
+        .register_contract => |e| {
+            const inner = registerContractEffectHashed(&e);
+            h.update(&inner);
+        },
+        .delete_contract => |name| h.update(name.value),
+        .update_contract_program_id => |pair| {
+            h.update(pair.contract_name.value);
+            h.update(pair.program_id.bytes);
+        },
+        .update_timeout_window => |pair| {
+            h.update(pair.contract_name.value);
+            switch (pair.timeout_window) {
+                .no_timeout => h.update(&[_]u8{0}),
+                .timeout => |t| {
+                    h.updateLeInt(u64, t.hard_timeout.height);
+                    h.updateLeInt(u64, t.soft_timeout.height);
+                },
+            }
+        },
+    }
+    return h.finalize();
+}
+
+/// `hyli_model::HyliOutput::hashed` from
+/// `crates/hyli-model/src/node/data_availability.rs`.
+///
+/// Update order (NOTE: tx_hash, tx_blob_count, state_reads, and tx_ctx
+/// are intentionally NOT hashed — only the fields below):
+///
+/// 1. `version.to_le_bytes()` (u32 → 4 bytes)
+/// 2. `initial_state.0`
+/// 3. `next_state.0`
+/// 4. `identity.0.as_bytes()`
+/// 5. `index.0.to_le_bytes()` (the Rust definition uses `usize`, which is
+///    8 bytes on the 64-bit Hyli deployment; we always emit 8 bytes)
+/// 6. for each `(blob_index, blob)` in `blobs`:
+///    - `blob_index.0.to_le_bytes()` (8 bytes, see above)
+///    - `blob.contract_name.0.as_bytes()`
+///    - `blob.data.0`
+/// 7. `[success as u8]`
+/// 8. `onchain_effects.len().to_le_bytes()` (8 bytes, see above)
+/// 9. for each effect: `effect.hashed().0`
+/// 10. `program_outputs`
+pub fn hyliOutputHashed(output: *const types.HyliOutput) Digest32 {
+    var h = Hasher.init();
+    h.updateLeInt(u32, output.version);
+    h.update(output.initial_state.bytes);
+    h.update(output.next_state.bytes);
+    h.update(output.identity.value);
+    h.updateLeInt(u64, output.index.index);
+    for (output.blobs.blobs) |entry| {
+        h.updateLeInt(u64, entry.index.index);
+        h.update(entry.blob.contract_name.value);
+        h.update(entry.blob.data.bytes);
+    }
+    h.update(&[_]u8{@intFromBool(output.success)});
+    h.updateLeInt(u64, output.onchain_effects.len);
+    for (output.onchain_effects) |*effect| {
+        const inner = onchainEffectHashed(effect);
+        h.update(&inner);
+    }
+    h.update(output.program_outputs);
+    return h.finalize();
+}
+
 /// `hyli_model::DataProposal::hashed` from `crates/hyli-model/src/node/mempool.rs`.
 ///
 /// Update order:
@@ -395,6 +503,147 @@ test "ConsensusProposal::hashed matches Rust fixture (full)" {
     };
     const got = consensusProposalHashed(&cp);
     try testing.expectEqualSlices(u8, corpus.hash.model.consensus_proposal_full, &got);
+}
+
+test "RegisterContractEffect::hashed matches Rust fixture" {
+    const effect: types.RegisterContractEffect = .{
+        .verifier = .{ .value = "risc0" },
+        .program_id = .{ .bytes = &[_]u8{0xaa} ** 8 },
+        .state_commitment = .{ .bytes = &[_]u8{0xbb} ** 8 },
+        .contract_name = .{ .value = "counter" },
+        .timeout_window = .{ .timeout = .{
+            .hard_timeout = .{ .height = 50 },
+            .soft_timeout = .{ .height = 100 },
+        } },
+    };
+    const got = registerContractEffectHashed(&effect);
+    try testing.expectEqualSlices(u8, corpus.hash.model.register_contract_effect, &got);
+    // The same field set is fed to RegisterContractAction::hashed, so the
+    // digest must agree.
+    try testing.expectEqualSlices(u8, corpus.hash.model.register_contract_action, &got);
+}
+
+fn sampleHashRegisterContractEffect() types.RegisterContractEffect {
+    return .{
+        .verifier = .{ .value = "risc0" },
+        .program_id = .{ .bytes = &[_]u8{0xaa} ** 8 },
+        .state_commitment = .{ .bytes = &[_]u8{0xbb} ** 8 },
+        .contract_name = .{ .value = "counter" },
+        .timeout_window = .{ .timeout = .{
+            .hard_timeout = .{ .height = 50 },
+            .soft_timeout = .{ .height = 100 },
+        } },
+    };
+}
+
+test "OnchainEffect::hashed (RegisterContractWithConstructor) matches Rust fixture" {
+    const effect: types.OnchainEffect = .{
+        .register_contract_with_constructor = sampleHashRegisterContractEffect(),
+    };
+    const got = onchainEffectHashed(&effect);
+    try testing.expectEqualSlices(
+        u8,
+        corpus.hash.model.onchain_effect_register_with_ctor,
+        &got,
+    );
+}
+
+test "OnchainEffect::hashed (RegisterContract) matches Rust fixture" {
+    const effect: types.OnchainEffect = .{
+        .register_contract = sampleHashRegisterContractEffect(),
+    };
+    const got = onchainEffectHashed(&effect);
+    try testing.expectEqualSlices(u8, corpus.hash.model.onchain_effect_register, &got);
+}
+
+test "OnchainEffect::hashed (DeleteContract) matches Rust fixture" {
+    const effect: types.OnchainEffect = .{
+        .delete_contract = .{ .value = "counter" },
+    };
+    const got = onchainEffectHashed(&effect);
+    try testing.expectEqualSlices(u8, corpus.hash.model.onchain_effect_delete, &got);
+}
+
+test "OnchainEffect::hashed (UpdateContractProgramId) matches Rust fixture" {
+    const effect: types.OnchainEffect = .{
+        .update_contract_program_id = .{
+            .contract_name = .{ .value = "counter" },
+            .program_id = .{ .bytes = &[_]u8{0xcc} ** 4 },
+        },
+    };
+    const got = onchainEffectHashed(&effect);
+    try testing.expectEqualSlices(u8, corpus.hash.model.onchain_effect_update_program_id, &got);
+}
+
+test "OnchainEffect::hashed (UpdateTimeoutWindow NoTimeout) matches Rust fixture" {
+    const effect: types.OnchainEffect = .{
+        .update_timeout_window = .{
+            .contract_name = .{ .value = "counter" },
+            .timeout_window = .no_timeout,
+        },
+    };
+    const got = onchainEffectHashed(&effect);
+    try testing.expectEqualSlices(u8, corpus.hash.model.onchain_effect_update_timeout_no, &got);
+}
+
+test "OnchainEffect::hashed (UpdateTimeoutWindow Timeout) matches Rust fixture" {
+    const effect: types.OnchainEffect = .{
+        .update_timeout_window = .{
+            .contract_name = .{ .value = "counter" },
+            .timeout_window = .{ .timeout = .{
+                .hard_timeout = .{ .height = 100 },
+                .soft_timeout = .{ .height = 200 },
+            } },
+        },
+    };
+    const got = onchainEffectHashed(&effect);
+    try testing.expectEqualSlices(u8, corpus.hash.model.onchain_effect_update_timeout_yes, &got);
+}
+
+test "HyliOutput::hashed matches Rust fixture" {
+    const blobs = &[_]types.IndexedBlobEntry{
+        .{
+            .index = .{ .index = 0 },
+            .blob = .{
+                .contract_name = .{ .value = "counter" },
+                .data = .{ .bytes = &[_]u8{ 0x10, 0x11 } },
+            },
+        },
+    };
+    const tx_ctx: types.TxContext = .{
+        .lane_id = .{
+            .operator = .{ .bytes = &[_]u8{} },
+            .suffix = "default",
+        },
+        .block_hash = .{ .bytes = &[_]u8{0x55} ** 4 },
+        .block_height = .{ .height = 123 },
+        .timestamp = .{ .millis = 456 },
+        .chain_id = 7,
+    };
+    const output: types.HyliOutput = .{
+        .version = 1,
+        .initial_state = .{ .bytes = &[_]u8{ 0x10, 0x11, 0x12, 0x13 } },
+        .next_state = .{ .bytes = &[_]u8{ 0x20, 0x21, 0x22, 0x23 } },
+        .identity = .{ .value = "alice@counter" },
+        .index = .{ .index = 0 },
+        .blobs = .{ .blobs = blobs },
+        .tx_blob_count = 1,
+        .tx_hash = .{ .bytes = &[_]u8{0x77} ** 4 },
+        .success = true,
+        .state_reads = &[_]types.StateRead{
+            .{
+                .contract_name = .{ .value = "counter" },
+                .state_commitment = .{ .bytes = &[_]u8{ 0x10, 0x11, 0x12, 0x13 } },
+            },
+        },
+        .tx_ctx = tx_ctx,
+        .onchain_effects = &[_]types.OnchainEffect{
+            .{ .register_contract = sampleHashRegisterContractEffect() },
+        },
+        .program_outputs = &[_]u8{ 0xab, 0xcd },
+    };
+    const got = hyliOutputHashed(&output);
+    try testing.expectEqualSlices(u8, corpus.hash.model.hyli_output, &got);
 }
 
 test "VerifiedProofTransaction::hashed matches ProofTransaction::hashed" {

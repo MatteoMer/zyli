@@ -10,18 +10,21 @@
 //!   2. Every fixture name appears in `INDEX.md` with the type it represents
 //!      and the upstream Hyli git revision used to generate it.
 
+use std::collections::BTreeMap;
 use std::fs;
 use std::io::Write as _;
 use std::path::{Path, PathBuf};
 
 use borsh::BorshSerialize;
 use hyli_model::{
-    utils::TimestampMs, AggregateSignature, Blob, BlobData, BlobIndex, BlobTransaction,
-    BlockHeight, ConsensusProposal, ConsensusProposalHash, ConsensusStakingAction, ContractName,
-    DataProposal, DataProposalHash, DataProposalParent, Hashed, Identity, LaneBytesSize, LaneId,
-    ProgramId, ProofData, ProofDataHash, ProofTransaction, RegisterContractAction, Signature,
-    Signed, StateCommitment, TimeoutWindow, Transaction, TransactionData, ValidatorCandidacy,
-    ValidatorPublicKey, ValidatorSignature, Verifier, VerifiedProofTransaction,
+    utils::TimestampMs, AggregateSignature, Blob, BlobData, BlobHash, BlobIndex, BlobTransaction,
+    BlobsHashes, BlockHeight, Calldata, ConsensusProposal, ConsensusProposalHash,
+    ConsensusStakingAction, ContractName, DataProposal, DataProposalHash, DataProposalParent,
+    Hashed, HyliOutput, Identity, IndexedBlobs, LaneBytesSize, LaneId, OnchainEffect, ProgramId,
+    ProofData, ProofDataHash, ProofTransaction, RegisterContractAction, RegisterContractEffect,
+    Signature, Signed, StateCommitment, TimeoutWindow, Transaction, TransactionData, TxContext,
+    TxHash, ValidatorCandidacy, ValidatorPublicKey, ValidatorSignature, Verifier,
+    VerifiedProofTransaction,
 };
 use sha3::Digest as _;
 
@@ -750,6 +753,262 @@ fn main() {
         cp_full.hashed().0,
     );
 
+    // ---- T1: Replay-path types --------------------------------------------
+    //
+    // These are the consensus-critical types that drive the state-replay
+    // pipeline once an observer turns into a follower. They get fixtures
+    // before any Zig replay code lands so the byte and hash shapes are
+    // pinned independently.
+
+    // BlobsHashes is a thin wrapper around `BTreeMap<BlobIndex, BlobHash>`.
+    // We pin two cases: the empty map (just a `0u32` length prefix) and a
+    // 2-entry map. BTreeMap iteration order in Rust is sorted by key Ord,
+    // so the entries always come out in BlobIndex(0) < BlobIndex(1) order.
+    let mut empty_hashes_map: BTreeMap<BlobIndex, BlobHash> = BTreeMap::new();
+    let blobs_hashes_empty = BlobsHashes {
+        hashes: empty_hashes_map.clone(),
+    };
+    gen.write_borsh(
+        "model/blobs_hashes_empty",
+        "hyli_model::BlobsHashes",
+        "BlobsHashes { hashes: {} }",
+        &blobs_hashes_empty,
+    );
+    empty_hashes_map.insert(BlobIndex(0), BlobHash(vec![0xaa; 4]));
+    empty_hashes_map.insert(BlobIndex(1), BlobHash(vec![0xbb; 4]));
+    let blobs_hashes_two = BlobsHashes {
+        hashes: empty_hashes_map,
+    };
+    let blobs_hashes_two_bytes = borsh::to_vec(&blobs_hashes_two).expect("borsh BlobsHashes");
+    // Pin the exact wire layout: u32 length=2 ‖ key0 (u64) ‖ value0 (Vec<u8>)
+    // ‖ key1 (u64) ‖ value1 (Vec<u8>). BTreeMap sorts keys ascending, so the
+    // order is BlobIndex(0) before BlobIndex(1).
+    let mut blobs_hashes_two_expected = Vec::new();
+    blobs_hashes_two_expected.extend_from_slice(&2u32.to_le_bytes());
+    blobs_hashes_two_expected.extend_from_slice(&0u64.to_le_bytes()); // BlobIndex(0)
+    blobs_hashes_two_expected.extend_from_slice(&4u32.to_le_bytes()); // BlobHash len
+    blobs_hashes_two_expected.extend_from_slice(&[0xaa; 4]);
+    blobs_hashes_two_expected.extend_from_slice(&1u64.to_le_bytes()); // BlobIndex(1)
+    blobs_hashes_two_expected.extend_from_slice(&4u32.to_le_bytes()); // BlobHash len
+    blobs_hashes_two_expected.extend_from_slice(&[0xbb; 4]);
+    assert_eq!(
+        blobs_hashes_two_bytes, blobs_hashes_two_expected,
+        "BlobsHashes wire layout drifted from u32-len + sorted key/value pairs",
+    );
+    gen.write_borsh(
+        "model/blobs_hashes_two",
+        "hyli_model::BlobsHashes",
+        "BlobsHashes { 0 -> [0xaa;4], 1 -> [0xbb;4] }",
+        &blobs_hashes_two,
+    );
+
+    // TxContext: small wrapper that Calldata and HyliOutput can carry
+    // optionally. Verbose enough that pinning it standalone is worth the
+    // extra fixture.
+    // BlockHash is a type alias for ConsensusProposalHash, so the
+    // constructor name on the wire side is `ConsensusProposalHash(...)`.
+    let tx_ctx = TxContext {
+        lane_id: LaneId::default(),
+        block_hash: ConsensusProposalHash(vec![0x55; 4]),
+        block_height: BlockHeight(123),
+        timestamp: TimestampMs(456),
+        chain_id: 7,
+    };
+    gen.write_borsh(
+        "model/tx_context",
+        "hyli_model::TxContext",
+        "TxContext { lane=default, block=[0x55;4], height=123, ts=456, chain_id=7 }",
+        &tx_ctx,
+    );
+
+    // Calldata: passed from the application to the contract. Borsh field
+    // order is the canonical contract.rs declaration order.
+    let calldata_blobs = IndexedBlobs(vec![(
+        BlobIndex(0),
+        Blob {
+            contract_name: ContractName("counter".to_string()),
+            data: BlobData(vec![0x10, 0x11]),
+        },
+    )]);
+    let calldata = Calldata {
+        tx_hash: TxHash(vec![0x77; 4]),
+        identity: Identity("alice@counter".to_string()),
+        blobs: calldata_blobs,
+        tx_blob_count: 1,
+        index: BlobIndex(0),
+        tx_ctx: Some(tx_ctx.clone()),
+        private_input: vec![0xfe, 0xed],
+    };
+    gen.write_borsh(
+        "model/calldata",
+        "hyli_model::Calldata",
+        "Calldata for tx=alice@counter with one blob and tx_ctx=Some",
+        &calldata,
+    );
+
+    // RegisterContractEffect: a stripped-down RegisterContractAction. Used
+    // by OnchainEffect::RegisterContract* variants. Both the borsh layout
+    // and the custom hash (verifier‖program_id‖state‖name‖opt timeout) get
+    // pinned.
+    let register_effect = RegisterContractEffect {
+        verifier: Verifier("risc0".to_string()),
+        program_id: ProgramId(vec![0xaa; 8]),
+        state_commitment: StateCommitment(vec![0xbb; 8]),
+        contract_name: ContractName("counter".to_string()),
+        timeout_window: Some(TimeoutWindow::Timeout {
+            hard_timeout: BlockHeight(50),
+            soft_timeout: BlockHeight(100),
+        }),
+    };
+    gen.write_borsh(
+        "model/register_contract_effect",
+        "hyli_model::RegisterContractEffect",
+        "RegisterContractEffect for counter w/ Some(timeout)",
+        &register_effect,
+    );
+    gen.write_hash(
+        "model/register_contract_effect",
+        "hyli_model::RegisterContractEffect",
+        "RegisterContractEffect::hashed",
+        register_effect.hashed().0,
+    );
+
+    // OnchainEffect: enum with five variants. We pin every variant so the
+    // Zig side can validate both the borsh tag order and the per-variant
+    // custom hash construction in `OnchainEffect::hashed`.
+    let oe_register_with_ctor =
+        OnchainEffect::RegisterContractWithConstructor(register_effect.clone());
+    gen.write_borsh(
+        "model/onchain_effect_register_with_ctor",
+        "hyli_model::OnchainEffect",
+        "OnchainEffect::RegisterContractWithConstructor(...)",
+        &oe_register_with_ctor,
+    );
+    gen.write_hash(
+        "model/onchain_effect_register_with_ctor",
+        "hyli_model::OnchainEffect",
+        "OnchainEffect::RegisterContractWithConstructor::hashed",
+        oe_register_with_ctor.hashed().0,
+    );
+    let oe_register = OnchainEffect::RegisterContract(register_effect.clone());
+    gen.write_borsh(
+        "model/onchain_effect_register",
+        "hyli_model::OnchainEffect",
+        "OnchainEffect::RegisterContract(...)",
+        &oe_register,
+    );
+    gen.write_hash(
+        "model/onchain_effect_register",
+        "hyli_model::OnchainEffect",
+        "OnchainEffect::RegisterContract::hashed",
+        oe_register.hashed().0,
+    );
+    let oe_delete = OnchainEffect::DeleteContract(ContractName("counter".to_string()));
+    gen.write_borsh(
+        "model/onchain_effect_delete",
+        "hyli_model::OnchainEffect",
+        "OnchainEffect::DeleteContract(\"counter\")",
+        &oe_delete,
+    );
+    gen.write_hash(
+        "model/onchain_effect_delete",
+        "hyli_model::OnchainEffect",
+        "OnchainEffect::DeleteContract::hashed",
+        oe_delete.hashed().0,
+    );
+    let oe_update_pid = OnchainEffect::UpdateContractProgramId(
+        ContractName("counter".to_string()),
+        ProgramId(vec![0xcc; 4]),
+    );
+    gen.write_borsh(
+        "model/onchain_effect_update_program_id",
+        "hyli_model::OnchainEffect",
+        "OnchainEffect::UpdateContractProgramId(\"counter\", [0xcc;4])",
+        &oe_update_pid,
+    );
+    gen.write_hash(
+        "model/onchain_effect_update_program_id",
+        "hyli_model::OnchainEffect",
+        "OnchainEffect::UpdateContractProgramId::hashed",
+        oe_update_pid.hashed().0,
+    );
+    let oe_update_timeout_no = OnchainEffect::UpdateTimeoutWindow(
+        ContractName("counter".to_string()),
+        TimeoutWindow::NoTimeout,
+    );
+    gen.write_borsh(
+        "model/onchain_effect_update_timeout_no",
+        "hyli_model::OnchainEffect",
+        "OnchainEffect::UpdateTimeoutWindow(\"counter\", NoTimeout)",
+        &oe_update_timeout_no,
+    );
+    gen.write_hash(
+        "model/onchain_effect_update_timeout_no",
+        "hyli_model::OnchainEffect",
+        "OnchainEffect::UpdateTimeoutWindow(NoTimeout)::hashed",
+        oe_update_timeout_no.hashed().0,
+    );
+    let oe_update_timeout_yes = OnchainEffect::UpdateTimeoutWindow(
+        ContractName("counter".to_string()),
+        TimeoutWindow::Timeout {
+            hard_timeout: BlockHeight(100),
+            soft_timeout: BlockHeight(200),
+        },
+    );
+    gen.write_borsh(
+        "model/onchain_effect_update_timeout_yes",
+        "hyli_model::OnchainEffect",
+        "OnchainEffect::UpdateTimeoutWindow(\"counter\", Timeout{100,200})",
+        &oe_update_timeout_yes,
+    );
+    gen.write_hash(
+        "model/onchain_effect_update_timeout_yes",
+        "hyli_model::OnchainEffect",
+        "OnchainEffect::UpdateTimeoutWindow(Timeout)::hashed",
+        oe_update_timeout_yes.hashed().0,
+    );
+
+    // HyliOutput: the zkVM-committed payload that drives state replay.
+    // Field order matches contract.rs exactly. The custom hash construction
+    // is pinned separately so the Zig side can implement it field-by-field
+    // (it is NOT sha3_256(borsh(self))).
+    let hyli_output = HyliOutput {
+        version: 1,
+        initial_state: StateCommitment(vec![0x10, 0x11, 0x12, 0x13]),
+        next_state: StateCommitment(vec![0x20, 0x21, 0x22, 0x23]),
+        identity: Identity("alice@counter".to_string()),
+        index: BlobIndex(0),
+        blobs: IndexedBlobs(vec![(
+            BlobIndex(0),
+            Blob {
+                contract_name: ContractName("counter".to_string()),
+                data: BlobData(vec![0x10, 0x11]),
+            },
+        )]),
+        tx_blob_count: 1,
+        tx_hash: TxHash(vec![0x77; 4]),
+        success: true,
+        state_reads: vec![(
+            ContractName("counter".to_string()),
+            StateCommitment(vec![0x10, 0x11, 0x12, 0x13]),
+        )],
+        tx_ctx: Some(tx_ctx.clone()),
+        onchain_effects: vec![oe_register.clone()],
+        program_outputs: vec![0xab, 0xcd],
+    };
+    gen.write_borsh(
+        "model/hyli_output",
+        "hyli_model::HyliOutput",
+        "HyliOutput for counter with one blob, one register effect, success=true",
+        &hyli_output,
+    );
+    gen.write_hash(
+        "model/hyli_output",
+        "hyli_model::HyliOutput",
+        "HyliOutput::hashed (custom field-by-field SHA3-256 over the struct)",
+        hyli_output.hashed().0,
+    );
+
     // ---- Wire framing -----------------------------------------------------
     //
     // Hyli wraps every TCP message in a default tokio-util
@@ -853,6 +1112,326 @@ fn main() {
         "[u8]",
         "Framed TcpData{headers=[(k,v)], payload=[0xaa,0xbb]}".to_string(),
         frame(&tcp_data_with_header_bytes),
+    );
+
+    // ---- Wire: P2P envelope and handshake ---------------------------------
+    //
+    // Mirrors of `hyli_net::tcp::{Canal, NodeConnectionData, Handshake,
+    // P2PTcpMessage}`. We don't depend on `hyli-net` directly because pulling
+    // it would drag tokio, sdk, and a dozen unrelated crates into the
+    // fixture-gen build. The wire layout is the contract — these local
+    // declarations exist only to feed the borsh serializer.
+    //
+    // If upstream ever changes a field, the corresponding Zig fixture test
+    // breaks at the next regeneration, which is exactly the behavior the
+    // executable spec is supposed to give us.
+
+    #[derive(borsh::BorshSerialize)]
+    struct CanalLocal(String);
+
+    #[derive(borsh::BorshSerialize)]
+    struct NodeConnectionDataLocal {
+        version: u16,
+        name: String,
+        current_height: u64,
+        p2p_public_address: String,
+        da_public_address: String,
+        start_timestamp: TimestampMs,
+    }
+
+    #[derive(borsh::BorshSerialize)]
+    enum HandshakeLocal {
+        Hello(
+            (
+                CanalLocal,
+                Signed<NodeConnectionDataLocal, ValidatorSignature>,
+                TimestampMs,
+            ),
+        ),
+        #[allow(dead_code)]
+        Verack(
+            (
+                CanalLocal,
+                Signed<NodeConnectionDataLocal, ValidatorSignature>,
+                TimestampMs,
+            ),
+        ),
+    }
+
+    #[derive(borsh::BorshSerialize)]
+    enum P2PTcpMessageLocal {
+        Handshake(HandshakeLocal),
+        // The Data variant carries an arbitrary payload type on the Rust
+        // side. We don't need a fixture for it here — the wire shape is
+        // exactly `1u8 ‖ <inner>`, and the Zig side reuses the existing
+        // model fixtures as the inner payload.
+        #[allow(dead_code)]
+        Data(Vec<u8>),
+    }
+
+    // Single Canal fixture so the Zig side can pin "the wire form is the
+    // raw String encoding".
+    let canal_p2p = CanalLocal("p2p".to_string());
+    gen.write_borsh(
+        "model/canal_p2p",
+        "hyli_net::tcp::Canal",
+        "Canal(\"p2p\") — newtype around String",
+        &canal_p2p,
+    );
+
+    // NodeConnectionData representative payload. Versions, addresses, and
+    // a deterministic timestamp.
+    let node_data = NodeConnectionDataLocal {
+        version: 1,
+        name: "validator-a".to_string(),
+        current_height: 42,
+        p2p_public_address: "127.0.0.1:4242".to_string(),
+        da_public_address: "127.0.0.1:4243".to_string(),
+        start_timestamp: TimestampMs(1_700_000_000_000),
+    };
+    gen.write_borsh(
+        "model/node_connection_data",
+        "hyli_net::tcp::NodeConnectionData",
+        "NodeConnectionData for validator-a, height=42",
+        &node_data,
+    );
+
+    // Sign-by-validator wrapper around NodeConnectionData. The signature
+    // bytes are deliberately deterministic placeholders — BLS12-381 is
+    // landing in zolt-arith later, and the wire layout is independent of
+    // whether the bytes are a real signature.
+    let signed_node_data = Signed::<NodeConnectionDataLocal, ValidatorSignature> {
+        msg: NodeConnectionDataLocal {
+            version: 1,
+            name: "validator-a".to_string(),
+            current_height: 42,
+            p2p_public_address: "127.0.0.1:4242".to_string(),
+            da_public_address: "127.0.0.1:4243".to_string(),
+            start_timestamp: TimestampMs(1_700_000_000_000),
+        },
+        signature: ValidatorSignature {
+            signature: Signature(vec![0xff; 8]),
+            validator: ValidatorPublicKey(vec![0x01; 4]),
+        },
+    };
+    gen.write_borsh(
+        "model/signed_node_connection_data",
+        "Signed<NodeConnectionData, ValidatorSignature>",
+        "SignedByValidator<NodeConnectionData>",
+        &signed_node_data,
+    );
+
+    // Handshake::Hello with the same payload, encoded as the inner-borsh
+    // bytes (no length prefix). This is what the Hyli observer needs to
+    // produce on first contact.
+    let handshake_hello = HandshakeLocal::Hello((
+        CanalLocal("p2p".to_string()),
+        Signed::<NodeConnectionDataLocal, ValidatorSignature> {
+            msg: NodeConnectionDataLocal {
+                version: 1,
+                name: "validator-a".to_string(),
+                current_height: 42,
+                p2p_public_address: "127.0.0.1:4242".to_string(),
+                da_public_address: "127.0.0.1:4243".to_string(),
+                start_timestamp: TimestampMs(1_700_000_000_000),
+            },
+            signature: ValidatorSignature {
+                signature: Signature(vec![0xff; 8]),
+                validator: ValidatorPublicKey(vec![0x01; 4]),
+            },
+        },
+        TimestampMs(1_700_000_000_001),
+    ));
+    let handshake_hello_bytes = borsh::to_vec(&handshake_hello).expect("borsh handshake hello");
+    // Pin the variant tag as 0u8 — Hello is the first declared variant.
+    assert_eq!(handshake_hello_bytes[0], 0u8, "Hello should be variant tag 0");
+    gen.write_bytes(
+        "wire",
+        "messages/handshake_hello_inner",
+        "hyli_net::tcp::Handshake",
+        "Handshake::Hello((Canal=\"p2p\", SignedByValidator<NodeConnectionData>, ts))".to_string(),
+        handshake_hello_bytes.clone(),
+    );
+
+    // Verack with the same payload as Hello — same shape but tag=1.
+    let handshake_verack = HandshakeLocal::Verack((
+        CanalLocal("p2p".to_string()),
+        Signed::<NodeConnectionDataLocal, ValidatorSignature> {
+            msg: NodeConnectionDataLocal {
+                version: 1,
+                name: "validator-a".to_string(),
+                current_height: 42,
+                p2p_public_address: "127.0.0.1:4242".to_string(),
+                da_public_address: "127.0.0.1:4243".to_string(),
+                start_timestamp: TimestampMs(1_700_000_000_000),
+            },
+            signature: ValidatorSignature {
+                signature: Signature(vec![0xff; 8]),
+                validator: ValidatorPublicKey(vec![0x01; 4]),
+            },
+        },
+        TimestampMs(1_700_000_000_002),
+    ));
+    let handshake_verack_bytes = borsh::to_vec(&handshake_verack).expect("borsh handshake verack");
+    assert_eq!(
+        handshake_verack_bytes[0], 1u8,
+        "Verack should be variant tag 1"
+    );
+    gen.write_bytes(
+        "wire",
+        "messages/handshake_verack_inner",
+        "hyli_net::tcp::Handshake",
+        "Handshake::Verack((Canal=\"p2p\", SignedByValidator<NodeConnectionData>, ts))"
+            .to_string(),
+        handshake_verack_bytes,
+    );
+
+    // P2PTcpMessage::Handshake(Hello(...)) — the outer envelope. The wire
+    // layout is `0u8 ‖ <handshake_hello_bytes>` because Handshake is the
+    // first declared variant of P2PTcpMessage.
+    let p2p_handshake_hello = P2PTcpMessageLocal::Handshake(HandshakeLocal::Hello((
+        CanalLocal("p2p".to_string()),
+        Signed::<NodeConnectionDataLocal, ValidatorSignature> {
+            msg: NodeConnectionDataLocal {
+                version: 1,
+                name: "validator-a".to_string(),
+                current_height: 42,
+                p2p_public_address: "127.0.0.1:4242".to_string(),
+                da_public_address: "127.0.0.1:4243".to_string(),
+                start_timestamp: TimestampMs(1_700_000_000_000),
+            },
+            signature: ValidatorSignature {
+                signature: Signature(vec![0xff; 8]),
+                validator: ValidatorPublicKey(vec![0x01; 4]),
+            },
+        },
+        TimestampMs(1_700_000_000_001),
+    )));
+    let p2p_handshake_hello_bytes =
+        borsh::to_vec(&p2p_handshake_hello).expect("borsh p2p handshake hello");
+    // Outer tag (Handshake) ‖ inner Handshake bytes.
+    assert_eq!(p2p_handshake_hello_bytes[0], 0u8, "Handshake variant tag");
+    assert_eq!(
+        &p2p_handshake_hello_bytes[1..],
+        &handshake_hello_bytes[..],
+        "P2PTcpMessage::Handshake should be a transparent wrapper",
+    );
+    gen.write_bytes(
+        "wire",
+        "messages/p2p_message_handshake_hello_inner",
+        "hyli_net::tcp::P2PTcpMessage<_>",
+        "P2PTcpMessage::Handshake(Handshake::Hello((Canal, signed, ts)))".to_string(),
+        p2p_handshake_hello_bytes.clone(),
+    );
+    gen.write_bytes(
+        "wire",
+        "messages/p2p_message_handshake_hello_framed",
+        "[u8]",
+        "Framed P2PTcpMessage::Handshake(Hello(...))".to_string(),
+        frame(&p2p_handshake_hello_bytes),
+    );
+
+    // P2PTcpMessage::Data — the payload here is `[0xaa, 0xbb, 0xcc]` so the
+    // expected wire form is `1u8 ‖ borsh(Vec<u8>([0xaa,0xbb,0xcc]))` =
+    // `01 03 00 00 00 aa bb cc`. Pinning the simplest possible Data variant
+    // is enough; the inner type is generic in Hyli and gets exercised by
+    // higher-level message fixtures.
+    let p2p_data = P2PTcpMessageLocal::Data(vec![0xaa, 0xbb, 0xcc]);
+    let p2p_data_bytes = borsh::to_vec(&p2p_data).expect("borsh p2p data");
+    assert_eq!(
+        p2p_data_bytes,
+        vec![1, 3, 0, 0, 0, 0xaa, 0xbb, 0xcc],
+        "P2PTcpMessage::Data wire layout drifted",
+    );
+    gen.write_bytes(
+        "wire",
+        "messages/p2p_message_data_inner",
+        "hyli_net::tcp::P2PTcpMessage<Vec<u8>>",
+        "P2PTcpMessage::Data(Vec<u8>([0xaa,0xbb,0xcc]))".to_string(),
+        p2p_data_bytes,
+    );
+
+    // ---- Crypto: BLS signable payload reference ---------------------------
+    //
+    // For every `Signed<T, V>` value Hyli puts on the wire, the bytes that
+    // get BLS-signed are *exactly* `borsh::to_vec(&msg)`. There is no
+    // domain separation, no length prefix, no envelope — see
+    // `crates/hyli-crypto/src/lib.rs` (`sign_msg` and `verify`).
+    //
+    // The DST string used by `blst::min_pk` is the only other piece of the
+    // signable surface that does not appear in any borsh fixture. Pin it
+    // as a corpus byte string so the future zolt-arith BLS verifier can
+    // compare its constant against the upstream value at test time.
+    //
+    // The signable bytes themselves are already covered by the existing
+    // borsh fixtures (e.g. `borsh/model/validator_candidacy.bin` is the
+    // byte string fed to BLS for a `SignedByValidator<ValidatorCandidacy>`).
+    // We re-emit a couple of them under the `borsh/crypto/signable_*`
+    // namespace and assert byte equivalence at fixture-generation time, so
+    // a future refactor that breaks the "signable == borsh(msg)" invariant
+    // fails the build before any Zig test runs.
+
+    let bls_dst: &[u8] = b"BLS_SIG_BLS12381G2_XMD:SHA-256_SSWU_RO_NUL_";
+    gen.write_bytes(
+        "borsh",
+        "crypto/bls_min_pk_dst",
+        "&[u8]",
+        "BLS12-381 min_pk DST string used by hyli-crypto::sign_msg".to_string(),
+        bls_dst.to_vec(),
+    );
+
+    // Signable payload for SignedByValidator<ValidatorCandidacy> is borsh(candidacy).
+    let signable_candidacy_bytes = borsh::to_vec(&candidacy).expect("borsh candidacy");
+    let candidacy_borsh = std::fs::read(
+        Path::new(manifest_dir)
+            .join("..")
+            .join("corpus")
+            .join("borsh")
+            .join("model")
+            .join("validator_candidacy.bin"),
+    )
+    .expect("read existing validator_candidacy.bin fixture");
+    assert_eq!(
+        signable_candidacy_bytes, candidacy_borsh,
+        "signable bytes for ValidatorCandidacy must equal borsh(msg)",
+    );
+    gen.write_bytes(
+        "borsh",
+        "crypto/signable_validator_candidacy",
+        "ValidatorCandidacy",
+        "Signable bytes for SignedByValidator<ValidatorCandidacy> = borsh(msg)".to_string(),
+        signable_candidacy_bytes,
+    );
+
+    // Signable payload for SignedByValidator<NodeConnectionData>.
+    let signable_node_data_bytes = borsh::to_vec(&NodeConnectionDataLocal {
+        version: 1,
+        name: "validator-a".to_string(),
+        current_height: 42,
+        p2p_public_address: "127.0.0.1:4242".to_string(),
+        da_public_address: "127.0.0.1:4243".to_string(),
+        start_timestamp: TimestampMs(1_700_000_000_000),
+    })
+    .expect("borsh node connection data");
+    let node_data_borsh = std::fs::read(
+        Path::new(manifest_dir)
+            .join("..")
+            .join("corpus")
+            .join("borsh")
+            .join("model")
+            .join("node_connection_data.bin"),
+    )
+    .expect("read existing node_connection_data.bin fixture");
+    assert_eq!(
+        signable_node_data_bytes, node_data_borsh,
+        "signable bytes for NodeConnectionData must equal borsh(msg)",
+    );
+    gen.write_bytes(
+        "borsh",
+        "crypto/signable_node_connection_data",
+        "NodeConnectionData",
+        "Signable bytes for SignedByValidator<NodeConnectionData> = borsh(msg)".to_string(),
+        signable_node_data_bytes,
     );
 
     let hyli_rev = detect_hyli_revision();
