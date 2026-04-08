@@ -26,6 +26,7 @@ const consensus_verify = @import("../crypto/consensus_verify.zig");
 const hash_mod = @import("../model/hash.zig");
 const follower_mod = @import("follower.zig");
 const block_store = @import("../storage/block_store.zig");
+const replay = @import("../state/replay.zig");
 
 /// What the caller gets back for each successfully-decoded event.
 pub const SyncEvent = union(enum) {
@@ -313,6 +314,8 @@ pub fn syncAndReport(
     var stored: usize = 0;
     var chain = ChainValidator{};
     var follower = follower_mod.Follower.init();
+    var replay_state = replay.ReplayState.init(allocator);
+    defer replay_state.deinit();
 
     // If the store has blocks, seed the chain validator and follower
     // with the last stored block so continuity checks work from the
@@ -381,6 +384,9 @@ pub fn syncAndReport(
                     else => "other",
                 };
 
+                // State replay.
+                replay_state.applyBlock(block);
+
                 // Verify the block's CommitQC certificate.
                 const bls_ok = consensus_verify.verifySignedBlockCertificate(
                     allocator,
@@ -415,6 +421,12 @@ pub fn syncAndReport(
 
     try stdout.print("da-sync: done — {d} blocks ({d} verified, {d} chain-ok, {d} stored), {d} not-found, follower at slot {d}\n", .{
         blocks, verified, chain.accepted, stored, not_found, follower.slot,
+    });
+    try stdout.print("da-sync: state — {d} blob txs, {d} proof txs, {d} contracts, {d} staking actions\n", .{
+        replay_state.blob_tx_count,
+        replay_state.proof_tx_count,
+        replay_state.contract_count,
+        replay_state.staking_action_count,
     });
 }
 
