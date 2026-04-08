@@ -23,7 +23,7 @@ Still missing for full BLS verification:
 - BLS verify entry point
 - Subgroup membership checks for hostile inputs
 
-**228 tests passing in zyli, 171 in zolt-arith (399 total). 153 fixtures.**
+**245 tests passing in zyli, 171 in zolt-arith (416 total). 153 fixtures.**
 
 - `build.zig` / `build.zig.zon` set up; library + executable build cleanly.
 - Borsh codec in `src/model/borsh.zig` covers primitives, options, slices,
@@ -152,6 +152,18 @@ Still missing for full BLS verification:
   (ok, outputs, error) with both success and failure variants.
   These are the surface a future Zig verifier-worker supervisor
   will need to drive (Phase 6 of the implementation plan).
+- `src/node/follower.zig` is the Phase 5 starting point: a stateless
+  consensus follower that folds borsh-decoded ConsensusNetMessage
+  values into events. Tracks slot/view/last_commit_hash, runs the
+  structural validator first, then cross-checks slot/view/timestamp
+  monotonicity for Prepare and SyncReply. The Event union surfaces
+  accepted_prepare, accepted_sync, committed, observed (generic),
+  observed_vote, observed_qc, and rejected (with structural_invalid
+  / out_of_order / commit_without_prepare reasons). Wired into both
+  `observe` and `replay` so live testnet traffic gets a real-time
+  follower verdict alongside the message label and validation
+  status. Does NOT verify signatures or replay state — those land
+  with BLS (Phase 2) and Phase 6 work respectively.
 - `src/wire/protocol.zig` exposes a `decodeP2PTcpMessage(allocator,
   Data, frame_bytes)` helper that returns a `Decoded(Data)` value
   backed by an internal arena allocator. The arena shape exists
