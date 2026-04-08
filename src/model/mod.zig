@@ -9,9 +9,11 @@
 
 pub const borsh = @import("borsh.zig");
 pub const types = @import("types.zig");
+pub const hash = @import("hash.zig");
 
 test {
     _ = borsh;
     _ = types;
+    _ = hash;
     _ = @import("compat_test.zig");
 }
