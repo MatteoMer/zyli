@@ -23,7 +23,7 @@ Still missing for full BLS verification:
 - BLS verify entry point
 - Subgroup membership checks for hostile inputs
 
-**176 tests passing in zyli, 111 in zolt-arith (287 total). 127 fixtures.**
+**176 tests passing in zyli, 128 in zolt-arith (304 total). 127 fixtures.**
 
 - `build.zig` / `build.zig.zon` set up; library + executable build cleanly.
 - Borsh codec in `src/model/borsh.zig` covers primitives, options, slices,
@@ -161,6 +161,21 @@ Still missing for full BLS verification:
     encodings and validated against the curve equation. Tested with
     neutrality, P + (-P) = id, the 2P/3P/4P consistency checks,
     commutativity, associativity, and scalar-multiplication identities.
+  - `bls12_381.G1Projective` / `bls12_381.G2Projective`: Jacobian
+    projective coordinates `(X, Y, Z)` representing the affine point
+    `(X/Z², Y/Z³)`. Doubling (`dbl-2009-l`) and addition
+    (`add-2007-bl`) are inversion-free; only the final affine
+    projection needs an inverse. The Miller loop will hold its G2
+    accumulator in this representation. Tested by cross-checking
+    against the affine arithmetic for every operation.
+  - `bls12_381.isInG1Subgroup` / `bls12_381.isInG2Subgroup`: subgroup
+    membership predicates that verify `r·P == identity`. Slow but
+    correct; the standard fast checks (Bowe's endomorphism trick)
+    can land later as drop-in replacements.
+  - `bls12_381.BLS_X_ABS` / `BLS_X_IS_NEGATIVE` / `BLS_X_LOOP_BITS`:
+    the BLS12-381 trace parameter the Miller loop walks, plus a
+    detailed roadmap comment for the optimal Ate pairing
+    (Miller loop + final exponentiation) that's still to come.
   - `bls12_381.fpSqrt` / `bls12_381.fp2Sqrt`: square roots in Fp and
     Fp2. The Fp version uses `a^((p+1)/4)` (BLS12-381's prime is
     `p ≡ 3 mod 4`); the Fp2 version uses the standard "norm trick"
