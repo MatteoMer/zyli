@@ -190,3 +190,20 @@ test "signatureToG2 rejects wrong-length input" {
     const short: types.Signature = .{ .bytes = &[_]u8{0x80} ** 95 };
     try testing.expectError(Error.InvalidSignatureLength, signatureToG2(short));
 }
+
+test "hash_to_field is reachable from zyli for the BLS DST" {
+    // Smoke test: feed an arbitrary message through hash_to_field_fp2
+    // with the BLS sign DST and check the output is non-degenerate.
+    // This is the path the upcoming bls.verify will use to hash the
+    // signable bytes into a G2 point.
+    var elements: [2]zolt_arith.bls12_381.Fp2 = undefined;
+    try zolt_arith.hash_to_field.hash_to_field_fp2(
+        &elements,
+        "test message",
+        @import("signable.zig").bls_min_pk_dst,
+    );
+    // Both Fp2 elements should be distinct from each other (overwhelming
+    // probability) and non-zero.
+    try testing.expect(!zolt_arith.bls12_381.Fp2.eql(elements[0], elements[1]));
+    try testing.expect(!zolt_arith.bls12_381.Fp2.eql(elements[0], zolt_arith.bls12_381.Fp2.zero()));
+}
