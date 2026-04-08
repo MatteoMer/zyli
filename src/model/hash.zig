@@ -178,6 +178,56 @@ pub fn verifiedProofTransactionHashed(tx: *const types.VerifiedProofTransaction)
     return h.finalize();
 }
 
+/// Mirror of `LaneId::update_hasher` from `staking.rs`.
+///
+/// Note: this is **distinct** from the `lane_id.to_string()` projection
+/// used by `DataProposal::hashed`. `update_hasher` feeds raw operator
+/// bytes followed by `b"-"` and then the suffix bytes — there is no hex
+/// encoding step. Hyli uses both projections in different code paths and
+/// they would silently agree only when the operator bytes happen to be
+/// printable ASCII, so the test fixtures pin both forms independently.
+fn laneIdUpdateRaw(h: *Hasher, lane_id: types.LaneId) void {
+    h.update(lane_id.operator.bytes);
+    h.update("-");
+    h.update(lane_id.suffix);
+}
+
+/// `hyli_model::ConsensusProposal::hashed` from `node/consensus.rs`.
+///
+/// Update order:
+/// 1. `slot.to_le_bytes()` (u64 LE → 8 bytes)
+/// 2. for each `(lane_id, dp_hash, _, _)` in `cut`:
+///       - `lane_id.update_hasher(...)` (raw operator ‖ "-" ‖ suffix)
+///       - `dp_hash.0`
+///    The `LaneBytesSize` and `AggregateSignature` parts of each cut
+///    entry are intentionally NOT hashed (the wildcard fields).
+/// 3. for each staking action:
+///       - `Bond { candidate }`: only the validator pubkey bytes
+///       - `PayFeesForDaDi { lane_id, cumul_size }`:
+///           lane_id.update_hasher(...) ‖ cumul_size.0.to_le_bytes()
+/// 4. `timestamp.0.to_le_bytes()` (u128 LE → 16 bytes)
+/// 5. `parent_hash.0`
+pub fn consensusProposalHashed(cp: *const types.ConsensusProposal) Digest32 {
+    var h = Hasher.init();
+    h.updateLeInt(u64, cp.slot);
+    for (cp.cut) |entry| {
+        laneIdUpdateRaw(&h, entry.lane_id);
+        h.update(entry.dp_hash.bytes);
+    }
+    for (cp.staking_actions) |action| {
+        switch (action) {
+            .bond => |signed| h.update(signed.signature.validator.bytes),
+            .pay_fees_for_dadi => |pay| {
+                laneIdUpdateRaw(&h, pay.lane_id);
+                h.updateLeInt(u64, pay.cumul_size.bytes);
+            },
+        }
+    }
+    h.updateLeInt(u128, cp.timestamp.millis);
+    h.update(cp.parent_hash.bytes);
+    return h.finalize();
+}
+
 /// `hyli_model::DataProposal::hashed` from `crates/hyli-model/src/node/mempool.rs`.
 ///
 /// Update order:
@@ -298,6 +348,53 @@ test "ProofTransaction::hashed matches Rust fixture" {
     };
     const got = proofTransactionHashed(&tx);
     try testing.expectEqualSlices(u8, corpus.hash.model.proof_transaction, &got);
+}
+
+test "ConsensusProposal::hashed matches Rust fixture (empty)" {
+    const cp: types.ConsensusProposal = .{
+        .slot = 1,
+        .parent_hash = .{ .bytes = "genesis" },
+        .cut = &[_]types.CutEntry{},
+        .staking_actions = &[_]types.ConsensusStakingAction{},
+        .timestamp = .{ .millis = 1234 },
+    };
+    const got = consensusProposalHashed(&cp);
+    try testing.expectEqualSlices(u8, corpus.hash.model.consensus_proposal_empty, &got);
+}
+
+test "ConsensusProposal::hashed matches Rust fixture (full)" {
+    const lane: types.LaneId = .{
+        .operator = .{ .bytes = &[_]u8{0x01} ** 4 },
+        .suffix = "lane-a",
+    };
+    const cut = &[_]types.CutEntry{
+        .{
+            .lane_id = lane,
+            .dp_hash = .{ .bytes = "dp-hash" },
+            .lane_bytes_size = .{ .bytes = 8192 },
+            .aggregate_signature = .{
+                .signature = .{ .bytes = &[_]u8{0xee} ** 12 },
+                .validators = &[_]types.ValidatorPublicKey{
+                    .{ .bytes = &[_]u8{0x01} ** 4 },
+                },
+            },
+        },
+    };
+    const actions = &[_]types.ConsensusStakingAction{
+        .{ .pay_fees_for_dadi = .{
+            .lane_id = lane,
+            .cumul_size = .{ .bytes = 8192 },
+        } },
+    };
+    const cp: types.ConsensusProposal = .{
+        .slot = 7,
+        .parent_hash = .{ .bytes = "prev-cp" },
+        .cut = cut,
+        .staking_actions = actions,
+        .timestamp = .{ .millis = 9999 },
+    };
+    const got = consensusProposalHashed(&cp);
+    try testing.expectEqualSlices(u8, corpus.hash.model.consensus_proposal_full, &got);
 }
 
 test "VerifiedProofTransaction::hashed matches ProofTransaction::hashed" {

@@ -186,6 +186,51 @@ pub const Transaction = struct {
     transaction_data: TransactionData,
 };
 
+/// `hyli_model::LaneBytesSize` (`LaneBytesSize(pub u64)`).
+pub const LaneBytesSize = struct {
+    bytes: u64,
+};
+
+/// `hyli_model::ConsensusProposalHash` (`ConsensusProposalHash(pub Vec<u8>)`).
+pub const ConsensusProposalHash = struct {
+    bytes: []const u8,
+};
+
+/// `hyli_model::ConsensusStakingAction`. The Rust `Bond` variant boxes its
+/// candidate (`Box<SignedByValidator<ValidatorCandidacy>>`); `Box` is
+/// invisible on the wire so the Zig mirror just stores the inner value
+/// directly.
+pub const ConsensusStakingAction = union(enum) {
+    bond: Signed(ValidatorCandidacy, ValidatorSignature),
+    pay_fees_for_dadi: struct {
+        lane_id: LaneId,
+        cumul_size: LaneBytesSize,
+    },
+};
+
+/// `hyli_model::Cut = Vec<(LaneId, DataProposalHash, LaneBytesSize, AggregateSignature)>`.
+///
+/// Borsh tuple structs encode their fields positionally with no length
+/// prefix and no envelope, so a Zig struct with the same field order
+/// produces identical bytes. We name the fields for readability and so
+/// the consensus hash code can read them back unambiguously.
+pub const CutEntry = struct {
+    lane_id: LaneId,
+    dp_hash: DataProposalHash,
+    lane_bytes_size: LaneBytesSize,
+    aggregate_signature: AggregateSignature,
+};
+
+/// `hyli_model::ConsensusProposal`. Field order matches the Rust definition
+/// exactly: slot, parent_hash, cut, staking_actions, timestamp.
+pub const ConsensusProposal = struct {
+    slot: u64,
+    parent_hash: ConsensusProposalHash,
+    cut: []const CutEntry,
+    staking_actions: []const ConsensusStakingAction,
+    timestamp: TimestampMs,
+};
+
 test "type sizes are platform-stable where it matters" {
     // BlockHeight is u64, not usize.
     try std.testing.expectEqual(@as(usize, 8), @sizeOf(u64));

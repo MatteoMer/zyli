@@ -360,3 +360,100 @@ test "fixture: AggregateSignature(2 validators)" {
         corpus.borsh.model.aggregate_signature_2,
     );
 }
+
+// ---------------------------------------------------------------------------
+// Consensus
+// ---------------------------------------------------------------------------
+
+test "fixture: LaneBytesSize(4096)" {
+    try expectMatchesFixture(
+        types.LaneBytesSize,
+        .{ .bytes = 4096 },
+        corpus.borsh.model.lane_bytes_size_4096,
+    );
+}
+
+test "fixture: ConsensusStakingAction::Bond — Box<T> is wire-transparent" {
+    const value: types.ConsensusStakingAction = .{
+        .bond = .{
+            .msg = .{ .peer_address = "127.0.0.1:4242" },
+            .signature = .{
+                .signature = .{ .bytes = &[_]u8{0xff} ** 8 },
+                .validator = .{ .bytes = &[_]u8{0x01} ** 4 },
+            },
+        },
+    };
+    try expectMatchesFixture(
+        types.ConsensusStakingAction,
+        value,
+        corpus.borsh.model.consensus_staking_action_bond,
+    );
+}
+
+test "fixture: ConsensusStakingAction::PayFeesForDaDi" {
+    const value: types.ConsensusStakingAction = .{
+        .pay_fees_for_dadi = .{
+            .lane_id = .{
+                .operator = .{ .bytes = &[_]u8{} },
+                .suffix = "default",
+            },
+            .cumul_size = .{ .bytes = 4096 },
+        },
+    };
+    try expectMatchesFixture(
+        types.ConsensusStakingAction,
+        value,
+        corpus.borsh.model.consensus_staking_action_pay,
+    );
+}
+
+test "fixture: ConsensusProposal (empty cut and staking_actions)" {
+    const value: types.ConsensusProposal = .{
+        .slot = 1,
+        .parent_hash = .{ .bytes = "genesis" },
+        .cut = &[_]types.CutEntry{},
+        .staking_actions = &[_]types.ConsensusStakingAction{},
+        .timestamp = .{ .millis = 1234 },
+    };
+    try expectMatchesFixture(
+        types.ConsensusProposal,
+        value,
+        corpus.borsh.model.consensus_proposal_empty,
+    );
+}
+
+test "fixture: ConsensusProposal (one cut entry, one PayFeesForDaDi)" {
+    const lane: types.LaneId = .{
+        .operator = .{ .bytes = &[_]u8{0x01} ** 4 },
+        .suffix = "lane-a",
+    };
+    const value: types.ConsensusProposal = .{
+        .slot = 7,
+        .parent_hash = .{ .bytes = "prev-cp" },
+        .cut = &[_]types.CutEntry{
+            .{
+                .lane_id = lane,
+                .dp_hash = .{ .bytes = "dp-hash" },
+                .lane_bytes_size = .{ .bytes = 8192 },
+                .aggregate_signature = .{
+                    .signature = .{ .bytes = &[_]u8{0xee} ** 12 },
+                    .validators = &[_]types.ValidatorPublicKey{
+                        .{ .bytes = &[_]u8{0x01} ** 4 },
+                    },
+                },
+            },
+        },
+        .staking_actions = &[_]types.ConsensusStakingAction{
+            .{ .pay_fees_for_dadi = .{
+                .lane_id = lane,
+                .cumul_size = .{ .bytes = 8192 },
+            } },
+        },
+        .timestamp = .{ .millis = 9999 },
+    };
+    try expectMatchesFixture(
+        types.ConsensusProposal,
+        value,
+        corpus.borsh.model.consensus_proposal_full,
+    );
+}

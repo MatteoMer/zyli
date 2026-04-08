@@ -11,11 +11,16 @@ Source: `hyli` git revision `e41899eb582d2d25d13a97a425ec76250484d45c`.
 | `borsh/model/blob_simple.bin` | `hyli_model::Blob` | 15 | Blob { contract_name="hyli", data=[1,2,3] } |
 | `borsh/model/blob_transaction.bin` | `hyli_model::BlobTransaction` | 51 | BlobTransaction(alice@hyli, [Blob(hyli,…), Blob(counter,…)]) |
 | `borsh/model/block_height_42.bin` | `hyli_model::BlockHeight` | 8 | BlockHeight(42) |
+| `borsh/model/consensus_proposal_empty.bin` | `hyli_model::ConsensusProposal` | 43 | ConsensusProposal { slot=1, cut=[], actions=[], ts=1234, parent=genesis } |
+| `borsh/model/consensus_proposal_full.bin` | `hyli_model::ConsensusProposal` | 135 | ConsensusProposal with one cut entry and one PayFeesForDaDi |
+| `borsh/model/consensus_staking_action_bond.bin` | `hyli_model::ConsensusStakingAction` | 39 | ConsensusStakingAction::Bond { candidate=SignedByValidator<ValidatorCandidacy> } |
+| `borsh/model/consensus_staking_action_pay.bin` | `hyli_model::ConsensusStakingAction` | 24 | ConsensusStakingAction::PayFeesForDaDi { lane=default, cumul=4096 } |
 | `borsh/model/contract_name_hyli.bin` | `hyli_model::ContractName` | 8 | ContractName("hyli") |
 | `borsh/model/data_proposal_empty.bin` | `hyli_model::DataProposal` | 15 | DataProposal::new(parent="parent", txs=[]) |
 | `borsh/model/data_proposal_parent_dp.bin` | `hyli_model::DataProposalParent` | 11 | DataProposalParent::DP("parent") |
 | `borsh/model/data_proposal_parent_lane_root.bin` | `hyli_model::DataProposalParent` | 16 | DataProposalParent::LaneRoot(LaneId::default()) |
 | `borsh/model/identity_alice.bin` | `hyli_model::Identity` | 14 | Identity("alice@hyli") |
+| `borsh/model/lane_bytes_size_4096.bin` | `hyli_model::LaneBytesSize` | 8 | LaneBytesSize(4096) |
 | `borsh/model/lane_id_default.bin` | `hyli_model::LaneId` | 15 | LaneId::default() |
 | `borsh/model/program_id_4_bytes.bin` | `hyli_model::ProgramId` | 8 | ProgramId([0xde,0xad,0xbe,0xef]) |
 | `borsh/model/proof_transaction.bin` | `hyli_model::ProofTransaction` | 46 | ProofTransaction(counter, risc0, ProofData([0x42; 16])) |
@@ -47,6 +52,8 @@ Source: `hyli` git revision `e41899eb582d2d25d13a97a425ec76250484d45c`.
 | `borsh/primitives/vec_u8_three.bin` | `Vec<u8>` | 7 | [1, 2, 3] |
 | `hash/model/blob_simple.bin` | `hyli_model::Blob` | 32 | Blob::hashed for the matching borsh fixture |
 | `hash/model/blob_transaction.bin` | `hyli_model::BlobTransaction` | 32 | BlobTransaction::hashed for the matching borsh fixture |
+| `hash/model/consensus_proposal_empty.bin` | `hyli_model::ConsensusProposal` | 32 | ConsensusProposal::hashed for the empty case |
+| `hash/model/consensus_proposal_full.bin` | `hyli_model::ConsensusProposal` | 32 | ConsensusProposal::hashed for the populated case |
 | `hash/model/data_proposal_empty.bin` | `hyli_model::DataProposal` | 32 | DataProposal::hashed for the empty-tx case |
 | `hash/model/proof_data.bin` | `hyli_model::ProofData` | 32 | ProofData::hashed for [0x42; 16] |
 | `hash/model/proof_transaction.bin` | `hyli_model::ProofTransaction` | 32 | ProofTransaction::hashed |

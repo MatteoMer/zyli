@@ -2,7 +2,7 @@
 
 ## Status
 
-Phase 0 + early Phase 3 underway. **66 tests passing.**
+Phase 0 + early Phase 3 underway. **73 tests passing.**
 
 - `build.zig` / `build.zig.zon` set up; library + executable build cleanly.
 - Borsh codec in `src/model/borsh.zig` covers primitives, options, slices,
@@ -30,9 +30,14 @@ Phase 0 + early Phase 3 underway. **66 tests passing.**
   as 8 bytes; the `Signed<>` test pins down generic envelope ordering.
 - `src/model/hash.zig` mirrors all Hyli SHA3-256 custom hashes that have
   fixtures: `Blob`, `RegisterContractAction`, `DataProposal`,
-  `ProofData`, `BlobTransaction`, `ProofTransaction`, and
-  `VerifiedProofTransaction`. The latter two share a digest construction
-  and the test asserts they agree.
+  `ProofData`, `BlobTransaction`, `ProofTransaction`,
+  `VerifiedProofTransaction`, and `ConsensusProposal` (custom field
+  selection: skips `LaneBytesSize` + `AggregateSignature` parts of each
+  cut entry, uses raw operator bytes for `LaneId::update_hasher` —
+  distinct from the hex projection used by `DataProposal::hashed`).
+- `Box<T>` transparency on the wire is asserted at fixture-generation
+  time so a borsh regression in the Bond variant would fail the build
+  before any Zig test runs.
 - Inventory of protocol-critical Hyli types lives in
   `.agent/hyli-model-inventory.md` and drives the next batch of
   fixtures.
@@ -42,10 +47,6 @@ Phase 0 + early Phase 3 underway. **66 tests passing.**
 - Add fixtures + Zig mirror for `Calldata`, `HyliOutput`, and
   `OnchainEffect` (along with their hashes where they exist). Each is
   consensus-critical for the replay path.
-- Add `ConsensusProposal` and its custom-hash construction (different
-  field selection from any of the existing T1 hashes — see
-  `node/consensus.rs`). This is the most subtle hash and should land
-  before any consensus follower work.
 - Decide how to encode `BTreeMap`-backed types (`BlobsHashes`) on the
   Zig side — Borsh requires sorted-by-key bytes. Either provide a
   wrapper type or assert callers pre-sort.

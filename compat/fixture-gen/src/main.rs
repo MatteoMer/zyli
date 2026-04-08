@@ -17,11 +17,11 @@ use std::path::{Path, PathBuf};
 use borsh::BorshSerialize;
 use hyli_model::{
     utils::TimestampMs, AggregateSignature, Blob, BlobData, BlobIndex, BlobTransaction,
-    BlockHeight, ContractName, DataProposal, DataProposalHash, DataProposalParent, Hashed,
-    Identity, LaneId, ProgramId, ProofData, ProofDataHash, ProofTransaction,
-    RegisterContractAction, Signature, Signed, StateCommitment, TimeoutWindow, Transaction,
-    TransactionData, ValidatorCandidacy, ValidatorPublicKey, ValidatorSignature, Verifier,
-    VerifiedProofTransaction,
+    BlockHeight, ConsensusProposal, ConsensusProposalHash, ConsensusStakingAction, ContractName,
+    DataProposal, DataProposalHash, DataProposalParent, Hashed, Identity, LaneBytesSize, LaneId,
+    ProgramId, ProofData, ProofDataHash, ProofTransaction, RegisterContractAction, Signature,
+    Signed, StateCommitment, TimeoutWindow, Transaction, TransactionData, ValidatorCandidacy,
+    ValidatorPublicKey, ValidatorSignature, Verifier, VerifiedProofTransaction,
 };
 use sha3::Digest as _;
 
@@ -622,6 +622,132 @@ fn main() {
         "hyli_model::AggregateSignature",
         "AggregateSignature with 2 validators",
         &agg,
+    );
+
+    // ---- T1: Consensus -----------------------------------------------------
+    //
+    // ConsensusStakingAction enum, both variants individually.
+    let staking_bond = ConsensusStakingAction::Bond {
+        candidate: Box::new(Signed::<ValidatorCandidacy, ValidatorSignature> {
+            msg: ValidatorCandidacy {
+                peer_address: "127.0.0.1:4242".to_string(),
+            },
+            signature: validator_signature.clone(),
+        }),
+    };
+    gen.write_borsh(
+        "model/consensus_staking_action_bond",
+        "hyli_model::ConsensusStakingAction",
+        "ConsensusStakingAction::Bond { candidate=SignedByValidator<ValidatorCandidacy> }",
+        &staking_bond,
+    );
+
+    // The Box<...> on the Bond variant must be invisible on the wire — the
+    // raw and the boxed encodings should be byte-identical. We assert that
+    // here at fixture-generation time so a regression in borsh would fail
+    // the build before any Zig test runs.
+    {
+        let raw_bytes = borsh::to_vec(&Signed::<ValidatorCandidacy, ValidatorSignature> {
+            msg: ValidatorCandidacy {
+                peer_address: "127.0.0.1:4242".to_string(),
+            },
+            signature: validator_signature.clone(),
+        })
+        .expect("borsh raw signed");
+        let boxed_bytes = borsh::to_vec(&staking_bond).expect("borsh boxed bond");
+        // boxed_bytes = 1-byte enum tag (0 for Bond) ‖ raw_bytes
+        assert_eq!(boxed_bytes[0], 0u8, "Bond is variant index 0");
+        assert_eq!(
+            &boxed_bytes[1..],
+            &raw_bytes[..],
+            "Box<T> should be transparent over the wire"
+        );
+    }
+
+    let staking_pay = ConsensusStakingAction::PayFeesForDaDi {
+        lane_id: LaneId::default(),
+        cumul_size: LaneBytesSize(4096),
+    };
+    gen.write_borsh(
+        "model/consensus_staking_action_pay",
+        "hyli_model::ConsensusStakingAction",
+        "ConsensusStakingAction::PayFeesForDaDi { lane=default, cumul=4096 }",
+        &staking_pay,
+    );
+
+    // LaneBytesSize standalone — handy for the BLS work later when
+    // hashing the same value with `to_le_bytes`.
+    gen.write_borsh(
+        "model/lane_bytes_size_4096",
+        "hyli_model::LaneBytesSize",
+        "LaneBytesSize(4096)",
+        &LaneBytesSize(4096),
+    );
+
+    // Empty ConsensusProposal: zero cut entries, zero staking actions, a
+    // fixed timestamp/parent. This is the simplest possible hash input,
+    // and the hash construction has to skip the empty cut/staking_actions
+    // loops cleanly.
+    let cp_empty = ConsensusProposal {
+        slot: 1,
+        parent_hash: ConsensusProposalHash(b"genesis".to_vec()),
+        cut: vec![],
+        staking_actions: vec![],
+        timestamp: TimestampMs(1234),
+    };
+    gen.write_borsh(
+        "model/consensus_proposal_empty",
+        "hyli_model::ConsensusProposal",
+        "ConsensusProposal { slot=1, cut=[], actions=[], ts=1234, parent=genesis }",
+        &cp_empty,
+    );
+    gen.write_hash(
+        "model/consensus_proposal_empty",
+        "hyli_model::ConsensusProposal",
+        "ConsensusProposal::hashed for the empty case",
+        cp_empty.hashed().0,
+    );
+
+    // Populated ConsensusProposal: one cut entry and one PayFeesForDaDi
+    // staking action. The cut entry uses a non-default LaneId so the test
+    // pins the raw-bytes (NOT hex) update_hasher path. The
+    // LaneBytesSize and AggregateSignature on the cut entry are *not*
+    // fed into the hash, but they ARE part of the borsh wire format —
+    // confirming this round-trips proves both halves of the
+    // hash-vs-encode split.
+    let cut_lane = LaneId::with_suffix(ValidatorPublicKey(vec![0x01; 4]), "lane-a");
+    let cut_dp_hash = DataProposalHash(b"dp-hash".to_vec());
+    let cut_size = LaneBytesSize(8192);
+    let cut_agg = AggregateSignature {
+        signature: Signature(vec![0xee; 12]),
+        validators: vec![ValidatorPublicKey(vec![0x01; 4])],
+    };
+    let cp_full = ConsensusProposal {
+        slot: 7,
+        parent_hash: ConsensusProposalHash(b"prev-cp".to_vec()),
+        cut: vec![(
+            cut_lane.clone(),
+            cut_dp_hash.clone(),
+            cut_size,
+            cut_agg.clone(),
+        )],
+        staking_actions: vec![ConsensusStakingAction::PayFeesForDaDi {
+            lane_id: cut_lane.clone(),
+            cumul_size: LaneBytesSize(8192),
+        }],
+        timestamp: TimestampMs(9999),
+    };
+    gen.write_borsh(
+        "model/consensus_proposal_full",
+        "hyli_model::ConsensusProposal",
+        "ConsensusProposal with one cut entry and one PayFeesForDaDi",
+        &cp_full,
+    );
+    gen.write_hash(
+        "model/consensus_proposal_full",
+        "hyli_model::ConsensusProposal",
+        "ConsensusProposal::hashed for the populated case",
+        cp_full.hashed().0,
     );
 
     let hyli_rev = detect_hyli_revision();
