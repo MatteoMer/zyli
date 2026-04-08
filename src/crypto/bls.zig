@@ -114,6 +114,60 @@ pub fn verifySignedByValidator(
 }
 
 // ---------------------------------------------------------------------------
+// Aggregate signature verification.
+//
+// Hyli uses same-message BLS aggregates for consensus QCs: many
+// validators sign the same prepare/commit/timeout payload, the
+// signatures are summed, and the resulting `AggregateSignature`
+// carries both the summed bytes and the validator list. The verifier
+// rebuilds the aggregate public key from the validator list, then
+// runs the standard `verify` rule against the aggregated signature.
+// ---------------------------------------------------------------------------
+
+/// Verify a Hyli `AggregateSignature` envelope against the bytes the
+/// validators signed. Decodes each validator pubkey out of the
+/// `validators` list, decodes the aggregate signature, and runs the
+/// same-message aggregate verifier.
+///
+/// Allocates a small temporary buffer to hold the decoded pubkeys
+/// (heap-allocated so the validator list size isn't bounded at compile
+/// time). Empty validator lists always reject.
+pub fn verifyAggregateSig(
+    allocator: std.mem.Allocator,
+    agg: types.AggregateSignature,
+    msg_bytes: []const u8,
+) Error!bool {
+    if (agg.signature.bytes.len != 96) return Error.InvalidSignatureEncoding;
+
+    const pks = try allocator.alloc(zolt_arith.bls12_381.G1Affine, agg.validators.len);
+    defer allocator.free(pks);
+    for (agg.validators, 0..) |pk, i| {
+        if (pk.bytes.len != 48) return Error.InvalidPubkeyEncoding;
+        pks[i] = decodeG1Compressed(pk.bytes) catch return Error.InvalidPubkeyEncoding;
+    }
+    const sig = decodeG2Compressed(agg.signature.bytes) catch return Error.InvalidSignatureEncoding;
+
+    return zolt_arith.bls.verifyAggregate(pks, msg_bytes, sig, DST) catch |err| switch (err) {
+        zolt_arith.bls.VerifyError.PublicKeyIsIdentity => Error.PublicKeyIsIdentity,
+        zolt_arith.bls.VerifyError.PublicKeyNotInSubgroup => Error.PublicKeyNotInSubgroup,
+        zolt_arith.bls.VerifyError.SignatureNotInSubgroup => Error.SignatureNotInSubgroup,
+        zolt_arith.bls.VerifyError.HashFailed => Error.HashFailed,
+    };
+}
+
+/// Typed convenience: verify a `Signed<Msg, AggregateSignature>`. Same
+/// shape as `verifySignedByValidator` but for the aggregate path.
+pub fn verifySignedAggregate(
+    allocator: std.mem.Allocator,
+    comptime Msg: type,
+    signed: types.Signed(Msg, types.AggregateSignature),
+) Error!bool {
+    const msg_bytes = try signable.signableBytesAlloc(allocator, Msg, signed.msg);
+    defer allocator.free(msg_bytes);
+    return verifyAggregateSig(allocator, signed.signature, msg_bytes);
+}
+
+// ---------------------------------------------------------------------------
 // Tests
 //
 // We don't have a Hyli-produced test fixture yet. Instead, we use the
@@ -185,6 +239,31 @@ test "verifyValidatorSig: rejects swapped message" {
         DST,
     );
     try testing.expect(!result);
+}
+
+test "verifyAggregateSig: rejects empty validator list" {
+    // Use an infinity-encoded G2 signature so the decoder accepts it,
+    // then assert the empty validator list short-circuits to false.
+    var infty_sig: [96]u8 = .{0} ** 96;
+    infty_sig[0] = 0xc0;
+    const agg: types.AggregateSignature = .{
+        .signature = .{ .bytes = &infty_sig },
+        .validators = &.{},
+    };
+    const result = try verifyAggregateSig(testing.allocator, agg, "msg");
+    try testing.expect(!result);
+}
+
+test "verifyAggregateSig: rejects wrong-length signature bytes" {
+    const short_sig: [95]u8 = .{0} ** 95;
+    const agg: types.AggregateSignature = .{
+        .signature = .{ .bytes = &short_sig },
+        .validators = &.{},
+    };
+    try testing.expectError(
+        Error.InvalidSignatureEncoding,
+        verifyAggregateSig(testing.allocator, agg, "msg"),
+    );
 }
 
 test "verifySignedByValidator: routes through borsh+verify" {
