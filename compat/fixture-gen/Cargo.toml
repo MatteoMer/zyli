@@ -14,3 +14,4 @@ borsh = { version = "1.6.0", features = ["derive", "rc"] }
 sha3 = "0.10"
 hex = "0.4"
 hyli-model = { path = "../../../hyli/crates/hyli-model", default-features = false, features = ["std", "full"] }
+blst = "0.3"

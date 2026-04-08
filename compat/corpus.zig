@@ -143,6 +143,16 @@ pub const borsh = struct {
     };
 };
 
+pub const crypto = struct {
+    pub const bls = struct {
+        pub const cross_impl_msg: []const u8 = @embedFile("corpus/crypto/bls/cross_impl_msg.bin");
+        pub const cross_impl_msg_alt: []const u8 = @embedFile("corpus/crypto/bls/cross_impl_msg_alt.bin");
+        pub const cross_impl_pubkey: []const u8 = @embedFile("corpus/crypto/bls/cross_impl_pubkey.bin");
+        pub const cross_impl_signature: []const u8 = @embedFile("corpus/crypto/bls/cross_impl_signature.bin");
+        pub const cross_impl_signature_alt: []const u8 = @embedFile("corpus/crypto/bls/cross_impl_signature_alt.bin");
+    };
+};
+
 pub const hash = struct {
     pub const model = struct {
         pub const blob_proof_output_sample: []const u8 = @embedFile("corpus/hash/model/blob_proof_output_sample.bin");

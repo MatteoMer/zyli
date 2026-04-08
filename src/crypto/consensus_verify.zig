@@ -29,6 +29,7 @@ const types = @import("../model/types.zig");
 const bls = @import("bls.zig");
 const signable = @import("signable.zig");
 const borsh = @import("../model/borsh.zig");
+const hash = @import("../model/hash.zig");
 
 pub const Error = bls.Error || borsh.Error;
 
@@ -106,6 +107,70 @@ pub fn verifyQuorumCertificate(
     return bls.verifyAggregateSig(allocator, qc.aggregate, msg_bytes);
 }
 
+/// Verify a timeout-flavoured aggregate QC. The signed message is a
+/// `TimeoutSignedPayload(slot, view, cph, marker)` — the same 4-tuple
+/// that individual `Timeout` envelopes carry. The caller provides the
+/// expected marker so we can reject a QC that was built with the wrong
+/// variant (e.g. a `NilConsensusTimeout` marker on a regular TimeoutQC).
+pub fn verifyTimeoutQC(
+    allocator: std.mem.Allocator,
+    qc: types.QuorumCertificate,
+    slot: types.Slot,
+    view: types.View,
+    cph: types.ConsensusProposalHash,
+    expected_marker: types.ConsensusMarker,
+) Error!bool {
+    if (qc.marker != expected_marker) return false;
+    const payload: types.TimeoutSignedPayload = .{
+        .slot = slot,
+        .view = view,
+        .consensus_proposal_hash = cph,
+        .marker = expected_marker,
+    };
+    const msg_bytes = try signable.signableBytesAlloc(
+        allocator,
+        types.TimeoutSignedPayload,
+        payload,
+    );
+    defer allocator.free(msg_bytes);
+    return bls.verifyAggregateSig(allocator, qc.aggregate, msg_bytes);
+}
+
+/// Verify a `TimeoutCertificate`'s embedded QCs. In the `prepare_qc`
+/// variant, we can compute the `cph` from the embedded proposal and
+/// verify both the inner PrepareQC and the outer TimeoutQC. In the
+/// `nil_proposal` variant, the NilQC's signed payload requires the
+/// cph that the nil-timeout voters agreed on — for now we only verify
+/// the outer TimeoutQC in the `prepare_qc` case.
+pub fn verifyTimeoutCertificate(
+    allocator: std.mem.Allocator,
+    tc: types.TimeoutCertificatePayload,
+) Error!bool {
+    switch (tc.tc_kind) {
+        .prepare_qc => |qwp| {
+            // Compute the consensus proposal hash from the embedded proposal.
+            const cph_digest = hash.consensusProposalHashed(&qwp.proposal);
+            const cph: types.ConsensusProposalHash = .{ .bytes = &cph_digest };
+
+            // 1. Verify the inner PrepareQC (votes for .prepare_vote marker).
+            if (!try verifyQuorumCertificate(allocator, qwp.quorum_certificate, cph, .prepare_vote)) {
+                return false;
+            }
+
+            // 2. Verify the outer TimeoutQC (aggregate timeout votes).
+            return verifyTimeoutQC(allocator, tc.timeout_qc, tc.slot, tc.view, cph, .consensus_timeout);
+        },
+        .nil_proposal => |_| {
+            // The nil-proposal variant's signers signed a
+            // TimeoutSignedPayload with .nil_consensus_timeout marker.
+            // We don't have the cph they agreed on (no embedded
+            // proposal), so we can't verify the aggregate signature.
+            // Structural validation still applies via wire/validate.zig.
+            return true;
+        },
+    }
+}
+
 /// Verify a `Confirm` payload's PrepareQC.
 pub fn verifyConfirm(
     allocator: std.mem.Allocator,
@@ -142,13 +207,10 @@ pub fn verifyCommit(
 /// of their own (they carry data the wire-level validator already
 /// sanity-checks); they short-circuit to `true`.
 ///
-/// `Prepare` carries a `Ticket` which can embed a `CommitQC` (in the
-/// `commit_qc` variant) — verify it. The `timeout_qc` ticket variant
-/// also carries a TimeoutQC which we attempt to verify, but the
-/// `nil_proposal` / `prepare_qc` inner `TCKind` requires the cph from
-/// the embedded proposal which we don't have on the ticket itself, so
-/// for now we only verify the outer TimeoutQC. A future hardening
-/// pass can plumb the inner cph through.
+/// `TimeoutCertificate` in the `prepare_qc` variant now verifies both
+/// the inner PrepareQC and the outer TimeoutQC by computing the cph
+/// from the embedded proposal. The `nil_proposal` variant still
+/// short-circuits because the cph is not available on the certificate.
 pub fn verifyConsensusMessage(
     allocator: std.mem.Allocator,
     msg: types.ConsensusNetMessage,
@@ -165,9 +227,7 @@ pub fn verifyConsensusMessage(
         .confirm_ack => |ca| verifyConfirmAck(allocator, ca),
         .commit => |c| verifyCommit(allocator, c),
         .timeout => |t| verifyConsensusTimeout(allocator, t),
-        .timeout_certificate => |_| true, // outer signatures are aggregated;
-        // verifying them requires the cph from the embedded proposal
-        // chain. Plumbing that through is Phase 5 hardening work.
+        .timeout_certificate => |tc| verifyTimeoutCertificate(allocator, tc),
         .validator_candidacy => |vc| verifyValidatorCandidacy(allocator, vc),
         .sync_request => |_| true,
         .sync_reply => |_| true,
@@ -481,4 +541,207 @@ test "verifyConsensusMessage: dispatches to the right verifier per variant" {
     };
     const ok = try verifyConsensusMessage(testing.allocator, cnm);
     try testing.expect(ok);
+}
+
+test "verifyTimeoutCertificate: round-trip with prepare_qc variant" {
+    // Build a TimeoutCertificate carrying both an inner PrepareQC and an
+    // outer TimeoutQC. Both QCs are aggregate-signed by two validators.
+    //
+    // The flow:
+    //   1. Build a ConsensusProposal and hash it to get the cph.
+    //   2. Two validators sign the PrepareVote payload → PrepareQC.
+    //   3. The same two validators sign the Timeout payload → TimeoutQC.
+    //   4. Wrap everything in a TimeoutCertificatePayload.
+    //   5. Verify via verifyTimeoutCertificate.
+
+    const proposal: types.ConsensusProposal = .{
+        .slot = 5,
+        .parent_hash = .{ .bytes = "parent-hash" },
+        .cut = &[_]types.CutEntry{},
+        .staking_actions = &[_]types.ConsensusStakingAction{},
+        .timestamp = .{ .millis = 42_000 },
+    };
+    const cph_digest = hash.consensusProposalHashed(&proposal);
+    const cph: types.ConsensusProposalHash = .{ .bytes = &cph_digest };
+
+    const sk1_limbs: [4]u64 = .{ 31, 0, 0, 0 };
+    const sk2_limbs: [4]u64 = .{ 37, 0, 0, 0 };
+    const pk1 = bls12_381.g1Generator().mul(4, sk1_limbs);
+    const pk2 = bls12_381.g1Generator().mul(4, sk2_limbs);
+    const pk1_bytes = bls12_381.encodeG1Compressed(pk1);
+    const pk2_bytes = bls12_381.encodeG1Compressed(pk2);
+
+    const validators = [_]types.ValidatorPublicKey{
+        .{ .bytes = &pk1_bytes },
+        .{ .bytes = &pk2_bytes },
+    };
+
+    // --- PrepareQC: aggregate PrepareVote signatures ---
+    const vote_payload: types.ConsensusVotePayload = .{
+        .consensus_proposal_hash = cph,
+        .marker = .prepare_vote,
+    };
+    const vote_bytes = try signable.signableBytesAlloc(
+        testing.allocator,
+        types.ConsensusVotePayload,
+        vote_payload,
+    );
+    defer testing.allocator.free(vote_bytes);
+
+    const h_vote = try hash_to_curve_g2.hashToG2(vote_bytes, bls.DST);
+    const vote_sig1 = h_vote.mul(4, sk1_limbs);
+    const vote_sig2 = h_vote.mul(4, sk2_limbs);
+    const vote_agg_sig = vote_sig1.add(vote_sig2);
+    const vote_agg_bytes = bls12_381.encodeG2Compressed(vote_agg_sig);
+
+    const prepare_qc: types.PrepareQC = .{
+        .aggregate = .{
+            .signature = .{ .bytes = &vote_agg_bytes },
+            .validators = &validators,
+        },
+        .marker = .prepare_vote,
+    };
+
+    // --- TimeoutQC: aggregate TimeoutSignedPayload signatures ---
+    const tc_slot: types.Slot = 5;
+    const tc_view: types.View = 3;
+    const timeout_payload: types.TimeoutSignedPayload = .{
+        .slot = tc_slot,
+        .view = tc_view,
+        .consensus_proposal_hash = cph,
+        .marker = .consensus_timeout,
+    };
+    const timeout_bytes = try signable.signableBytesAlloc(
+        testing.allocator,
+        types.TimeoutSignedPayload,
+        timeout_payload,
+    );
+    defer testing.allocator.free(timeout_bytes);
+
+    const h_timeout = try hash_to_curve_g2.hashToG2(timeout_bytes, bls.DST);
+    const timeout_sig1 = h_timeout.mul(4, sk1_limbs);
+    const timeout_sig2 = h_timeout.mul(4, sk2_limbs);
+    const timeout_agg_sig = timeout_sig1.add(timeout_sig2);
+    const timeout_agg_bytes = bls12_381.encodeG2Compressed(timeout_agg_sig);
+
+    const timeout_qc: types.TimeoutQC = .{
+        .aggregate = .{
+            .signature = .{ .bytes = &timeout_agg_bytes },
+            .validators = &validators,
+        },
+        .marker = .consensus_timeout,
+    };
+
+    // --- Assemble the TimeoutCertificatePayload ---
+    const tc: types.TimeoutCertificatePayload = .{
+        .timeout_qc = timeout_qc,
+        .tc_kind = .{
+            .prepare_qc = .{
+                .quorum_certificate = prepare_qc,
+                .proposal = proposal,
+            },
+        },
+        .slot = tc_slot,
+        .view = tc_view,
+    };
+
+    const result = try verifyTimeoutCertificate(testing.allocator, tc);
+    try testing.expect(result);
+}
+
+test "verifyTimeoutCertificate: rejects when inner PrepareQC is forged" {
+    // Same setup as above, but the PrepareQC uses a wrong signer.
+    const proposal: types.ConsensusProposal = .{
+        .slot = 5,
+        .parent_hash = .{ .bytes = "parent-hash" },
+        .cut = &[_]types.CutEntry{},
+        .staking_actions = &[_]types.ConsensusStakingAction{},
+        .timestamp = .{ .millis = 42_000 },
+    };
+    const cph_digest = hash.consensusProposalHashed(&proposal);
+    const cph: types.ConsensusProposalHash = .{ .bytes = &cph_digest };
+
+    const sk1_limbs: [4]u64 = .{ 41, 0, 0, 0 };
+    const sk2_limbs: [4]u64 = .{ 43, 0, 0, 0 };
+    const sk_wrong: [4]u64 = .{ 99, 0, 0, 0 }; // not in the validator set
+    const pk1 = bls12_381.g1Generator().mul(4, sk1_limbs);
+    const pk2 = bls12_381.g1Generator().mul(4, sk2_limbs);
+    const pk1_bytes = bls12_381.encodeG1Compressed(pk1);
+    const pk2_bytes = bls12_381.encodeG1Compressed(pk2);
+
+    const validators = [_]types.ValidatorPublicKey{
+        .{ .bytes = &pk1_bytes },
+        .{ .bytes = &pk2_bytes },
+    };
+
+    // Build a forged PrepareQC: sign with sk_wrong instead of sk2.
+    const vote_payload: types.ConsensusVotePayload = .{
+        .consensus_proposal_hash = cph,
+        .marker = .prepare_vote,
+    };
+    const vote_bytes = try signable.signableBytesAlloc(
+        testing.allocator,
+        types.ConsensusVotePayload,
+        vote_payload,
+    );
+    defer testing.allocator.free(vote_bytes);
+
+    const h_vote = try hash_to_curve_g2.hashToG2(vote_bytes, bls.DST);
+    const vote_sig1 = h_vote.mul(4, sk1_limbs);
+    const vote_sig_wrong = h_vote.mul(4, sk_wrong); // forged!
+    const vote_agg_sig = vote_sig1.add(vote_sig_wrong);
+    const vote_agg_bytes = bls12_381.encodeG2Compressed(vote_agg_sig);
+
+    const prepare_qc: types.PrepareQC = .{
+        .aggregate = .{
+            .signature = .{ .bytes = &vote_agg_bytes },
+            .validators = &validators,
+        },
+        .marker = .prepare_vote,
+    };
+
+    // Build a valid TimeoutQC (so the failure is specifically in the PrepareQC).
+    const tc_slot: types.Slot = 5;
+    const tc_view: types.View = 3;
+    const timeout_payload: types.TimeoutSignedPayload = .{
+        .slot = tc_slot,
+        .view = tc_view,
+        .consensus_proposal_hash = cph,
+        .marker = .consensus_timeout,
+    };
+    const timeout_bytes = try signable.signableBytesAlloc(
+        testing.allocator,
+        types.TimeoutSignedPayload,
+        timeout_payload,
+    );
+    defer testing.allocator.free(timeout_bytes);
+
+    const h_timeout = try hash_to_curve_g2.hashToG2(timeout_bytes, bls.DST);
+    const timeout_sig1 = h_timeout.mul(4, sk1_limbs);
+    const timeout_sig2 = h_timeout.mul(4, sk2_limbs);
+    const timeout_agg_sig = timeout_sig1.add(timeout_sig2);
+    const timeout_agg_bytes = bls12_381.encodeG2Compressed(timeout_agg_sig);
+
+    const timeout_qc: types.TimeoutQC = .{
+        .aggregate = .{
+            .signature = .{ .bytes = &timeout_agg_bytes },
+            .validators = &validators,
+        },
+        .marker = .consensus_timeout,
+    };
+
+    const tc: types.TimeoutCertificatePayload = .{
+        .timeout_qc = timeout_qc,
+        .tc_kind = .{
+            .prepare_qc = .{
+                .quorum_certificate = prepare_qc,
+                .proposal = proposal,
+            },
+        },
+        .slot = tc_slot,
+        .view = tc_view,
+    };
+
+    const result = try verifyTimeoutCertificate(testing.allocator, tc);
+    try testing.expect(!result); // must reject: inner PrepareQC is forged
 }

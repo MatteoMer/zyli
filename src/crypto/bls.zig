@@ -242,6 +242,42 @@ test "verifyValidatorSig: rejects swapped message" {
     try testing.expect(!result);
 }
 
+test "verifyBlobBytes: cross-impl vector from Rust blst::min_pk verifies" {
+    // The fixture-gen produces this vector via the same blst surface
+    // hyli-crypto uses for sign_msg / verify. If our pipeline diverges
+    // from blst at any wire-format level (compression bits, hash-to-
+    // curve variant, DST handling, point ordering), this test fails.
+    const corpus_mod = @import("corpus");
+    const pk = corpus_mod.crypto.bls.cross_impl_pubkey;
+    const msg = corpus_mod.crypto.bls.cross_impl_msg;
+    const sig = corpus_mod.crypto.bls.cross_impl_signature;
+
+    const ok = try verifyBlobBytes(pk, msg, sig);
+    try testing.expect(ok);
+}
+
+test "verifyBlobBytes: cross-impl alternate-message vector verifies" {
+    const corpus_mod = @import("corpus");
+    const pk = corpus_mod.crypto.bls.cross_impl_pubkey;
+    const msg_alt = corpus_mod.crypto.bls.cross_impl_msg_alt;
+    const sig_alt = corpus_mod.crypto.bls.cross_impl_signature_alt;
+
+    const ok = try verifyBlobBytes(pk, msg_alt, sig_alt);
+    try testing.expect(ok);
+}
+
+test "verifyBlobBytes: cross-impl signature/message swap rejects" {
+    // Signature for the original message but verifying against the
+    // alternate message — must be rejected.
+    const corpus_mod = @import("corpus");
+    const pk = corpus_mod.crypto.bls.cross_impl_pubkey;
+    const msg_alt = corpus_mod.crypto.bls.cross_impl_msg_alt;
+    const sig_orig = corpus_mod.crypto.bls.cross_impl_signature;
+
+    const ok = try verifyBlobBytes(pk, msg_alt, sig_orig);
+    try testing.expect(!ok);
+}
+
 test "verifyAggregateSig: rejects empty validator list" {
     // Use an infinity-encoded G2 signature so the decoder accepts it,
     // then assert the empty validator list short-circuits to false.

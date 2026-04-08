@@ -2432,6 +2432,89 @@ fn main() {
         signable_node_data_bytes,
     );
 
+    // ---- Cross-implementation BLS test vectors ----------------------------
+    //
+    // The Zig BLS surface (zolt-arith) is validated locally against the
+    // algebraic identities (e(2P,Q) = e(P,Q)^2 etc.) and against
+    // self-generated (sk, pk, sig) round-trips. Neither catches a
+    // wire-format incompatibility — for that we need a signature
+    // produced by the *Rust* blst surface (the same one hyli-crypto
+    // uses) plus the canonical compressed pubkey, the message bytes,
+    // and the canonical compressed signature.
+    //
+    // We deliberately use a deterministic IKM so the test vector is
+    // reproducible across runs. The DST is the same one Hyli uses for
+    // sign_msg / verify (`BLS_SIG_BLS12381G2_XMD:SHA-256_SSWU_RO_NUL_`).
+    {
+        use blst::min_pk::{PublicKey, SecretKey, Signature};
+        // Deterministic IKM (32 bytes). Anything ≥ 32 bytes works for
+        // SecretKey::key_gen.
+        let ikm: [u8; 32] = [
+            0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0a, 0x0b, 0x0c, 0x0d,
+            0x0e, 0x0f, 0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17, 0x18, 0x19, 0x1a, 0x1b,
+            0x1c, 0x1d, 0x1e, 0x1f,
+        ];
+        let sk =
+            SecretKey::key_gen(&ikm, &[]).expect("blst SecretKey::key_gen with deterministic IKM");
+        let pk: PublicKey = sk.sk_to_pk();
+        let pk_compressed: [u8; 48] = pk.compress();
+
+        let msg = b"zyli cross-impl test vector v1";
+        let dst = b"BLS_SIG_BLS12381G2_XMD:SHA-256_SSWU_RO_NUL_";
+        let sig: Signature = sk.sign(msg, dst, &[]);
+        let sig_compressed: [u8; 96] = sig.compress();
+
+        // Sanity check: the signature must verify under blst's own
+        // verifier with the same DST.
+        assert!(
+            matches!(sig.verify(true, msg, dst, &[], &pk, true), blst::BLST_ERROR::BLST_SUCCESS),
+            "blst-produced signature failed blst's own verifier — fixture bug",
+        );
+
+        gen.write_bytes(
+            "crypto",
+            "bls/cross_impl_pubkey",
+            "blst::min_pk::PublicKey (compressed)",
+            "BLS12-381 G1 pubkey from deterministic blst SecretKey for cross-impl tests".to_string(),
+            pk_compressed.to_vec(),
+        );
+        gen.write_bytes(
+            "crypto",
+            "bls/cross_impl_msg",
+            "&[u8]",
+            "Message bytes signed by the cross-impl test pubkey".to_string(),
+            msg.to_vec(),
+        );
+        gen.write_bytes(
+            "crypto",
+            "bls/cross_impl_signature",
+            "blst::min_pk::Signature (compressed)",
+            "BLS12-381 G2 signature on the cross-impl message under cross_impl_pubkey".to_string(),
+            sig_compressed.to_vec(),
+        );
+
+        // A second message + signature so we can also test the negative
+        // verdict path with real blst-produced bytes (sig for msg A,
+        // verify against msg B → must reject).
+        let msg2 = b"zyli cross-impl test vector v1 alternate message";
+        let sig2: Signature = sk.sign(msg2, dst, &[]);
+        let sig2_compressed: [u8; 96] = sig2.compress();
+        gen.write_bytes(
+            "crypto",
+            "bls/cross_impl_msg_alt",
+            "&[u8]",
+            "Alternate message used to test signature/message mismatch rejection".to_string(),
+            msg2.to_vec(),
+        );
+        gen.write_bytes(
+            "crypto",
+            "bls/cross_impl_signature_alt",
+            "blst::min_pk::Signature (compressed)",
+            "Signature over the alternate message — verifies against msg_alt only".to_string(),
+            sig2_compressed.to_vec(),
+        );
+    }
+
     let hyli_rev = detect_hyli_revision();
     gen.write_index(&hyli_rev);
     gen.write_zig_manifest(&hyli_rev);
