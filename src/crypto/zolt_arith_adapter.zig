@@ -26,7 +26,9 @@ const zolt_arith = @import("zolt_arith");
 const bigint = zolt_arith.bigint;
 const Fp = zolt_arith.bls12_381.Fp;
 const G1Affine = zolt_arith.bls12_381.G1Affine;
+const G2Affine = zolt_arith.bls12_381.G2Affine;
 const decodeG1Compressed = zolt_arith.bls12_381.decodeG1Compressed;
+const decodeG2Compressed = zolt_arith.bls12_381.decodeG2Compressed;
 const types = @import("../model/types.zig");
 
 /// Convert a Hyli `ValidatorPublicKey` (compressed BLS12-381 G1, 48
@@ -64,6 +66,9 @@ pub fn validatorPublicKeyToG1(
 /// `c1` (imaginary) coordinate and the next 48 encode `c0` (real),
 /// matching the BLS12-381 G2 compressed encoding from
 /// draft-irtf-cfrg-pairing-friendly-curves §C.2.
+///
+/// This is the byte-shape conversion only — the full curve-point
+/// reconstruction is in `signatureToG2` below.
 pub fn signatureToLimbs(sig: types.Signature) Error!struct {
     c1: [6]u64,
     c0: [6]u64,
@@ -73,6 +78,19 @@ pub fn signatureToLimbs(sig: types.Signature) Error!struct {
         .c1 = bigint.fromBytesBe(6, sig.bytes[0..48]),
         .c0 = bigint.fromBytesBe(6, sig.bytes[48..96]),
     };
+}
+
+/// Full Hyli BLS `Signature` → BLS12-381 G2 point conversion.
+/// Validates the compressed encoding, reconstructs the y coordinate
+/// from the curve equation `y² = x³ + 4(1+u)`, and returns an affine
+/// G2 point ready for pairing-based verification.
+///
+/// Subgroup membership is intentionally NOT checked here.
+pub fn signatureToG2(
+    sig: types.Signature,
+) (Error || zolt_arith.bls12_381.PointDecodeError)!G2Affine {
+    if (sig.bytes.len != 96) return Error.InvalidSignatureLength;
+    return decodeG2Compressed(sig.bytes);
 }
 
 // ---------------------------------------------------------------------------
@@ -154,4 +172,21 @@ test "validatorPublicKeyToG1 decodes the canonical G1 generator" {
 test "validatorPublicKeyToG1 rejects wrong-length input" {
     const short: types.ValidatorPublicKey = .{ .bytes = &[_]u8{0x80} ** 47 };
     try testing.expectError(Error.InvalidPubkeyLength, validatorPublicKeyToG1(short));
+}
+
+test "signatureToG2 decodes the canonical G2 generator" {
+    // The canonical BLS12-381 G2 generator's compressed wire form. The
+    // signature byte type from Hyli has no semantic restriction
+    // beyond the 96-byte length, so re-using this fixture is fine.
+    const generator_hex = "93e02b6052719f607dacd3a088274f65596bd0d09920b61ab5da61bbdc7f5049334cf11213945d57e5ac7d055d042b7e024aa2b2f08f0a91260805272dc51051c6e47ad4fa403b02b4510b647ae3d1770bac0326a805bbefd48056c8c121bdb8";
+    var bytes: [96]u8 = undefined;
+    _ = try std.fmt.hexToBytes(&bytes, generator_hex);
+    const sig: types.Signature = .{ .bytes = &bytes };
+    const point = try signatureToG2(sig);
+    try testing.expect(point.isOnCurve());
+}
+
+test "signatureToG2 rejects wrong-length input" {
+    const short: types.Signature = .{ .bytes = &[_]u8{0x80} ** 95 };
+    try testing.expectError(Error.InvalidSignatureLength, signatureToG2(short));
 }

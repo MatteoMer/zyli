@@ -8,14 +8,23 @@ handshake, the replay path, the full consensus message family
 the SignedBlock shape, a stream-driven frame reader, and a typed
 P2PTcpMessage decoder. The executable's `observe HOST:PORT` subcommand
 prints actual ConsensusNetMessage variant labels for Data frames.
-Phases 1 and 2 of the implementation plan are **in progress**:
+Phases 1 and 2 of the implementation plan are **well underway**:
 `zolt-arith` exists as a sibling package at `../zolt-arith` with
-`bigint`, a generic Montgomery field (with Fermat inversion), the
-BLS12-381 base field `Fp`, the quadratic extension `Fp2`, and G1
-affine short-Weierstrass arithmetic (add / double / neg / scalar
-mul). Zyli depends on it via `build.zig.zon` and exposes a smoke test
-to keep the wiring honest.
-**172 tests passing in zyli, 66 in zolt-arith (238 total). 127 fixtures.**
+`bigint`, a generic Montgomery field, the BLS12-381 base field `Fp`,
+the quadratic extension `Fp2` (both with sqrt), G1 and G2 affine
+short-Weierstrass arithmetic (add / double / neg / scalar mul), AND
+compressed point decoding for both G1 and G2 — the wire format
+Hyli puts validator pubkeys and signatures in. Both decoders are
+wired into Zyli's `crypto/zolt_arith_adapter.zig`.
+
+Still missing for full BLS verification:
+- Fp6 / Fp12 tower extensions
+- Optimal Ate pairing (Miller loop + final exponentiation)
+- Hash-to-curve for G2 (RFC 9380 SSWU)
+- BLS verify entry point
+- Subgroup membership checks for hostile inputs
+
+**176 tests passing in zyli, 94 in zolt-arith (270 total). 127 fixtures.**
 
 - `build.zig` / `build.zig.zon` set up; library + executable build cleanly.
 - Borsh codec in `src/model/borsh.zig` covers primitives, options, slices,
@@ -130,23 +139,34 @@ to keep the wiring honest.
     and norm-based inversion. Tested with the `u² = -1` invariant,
     distributive multiplication, hand-computed values, and inversion
     round-trips.
-  - `bls12_381.G1Affine`: short-Weierstrass curve `y² = x³ + 4` over
-    Fp. `identity`, `fromRaw`, `isOnCurve`, `eql`, `neg`, `double`,
-    `add`, and double-and-add `mul` parametric over scalar limb count.
-    The BLS12-381 G1 generator coordinates from RFC 9380 §8.8.1 are
-    pinned and validated. Tested with neutrality, P + (-P) = id, the
-    2P/3P/4P consistency checks, commutativity, associativity, and
-    scalar-multiplication identities. All operations cycle through
-    Fermat inversion so this is slow but correct.
+  - `bls12_381.G1Affine` / `bls12_381.G2Affine`: short-Weierstrass
+    curves `y² = x³ + 4` (G1, over Fp) and `y² = x³ + 4(1+u)` (G2,
+    over Fp2). `identity`, `fromRaw`, `isOnCurve`, `eql`, `neg`,
+    `double`, `add`, and double-and-add `mul` parametric over scalar
+    limb count. Generator coordinates pinned from the standard hex
+    encodings and validated against the curve equation. Tested with
+    neutrality, P + (-P) = id, the 2P/3P/4P consistency checks,
+    commutativity, associativity, and scalar-multiplication identities.
+  - `bls12_381.fpSqrt` / `bls12_381.fp2Sqrt`: square roots in Fp and
+    Fp2. The Fp version uses `a^((p+1)/4)` (BLS12-381's prime is
+    `p ≡ 3 mod 4`); the Fp2 version uses the standard "norm trick"
+    that reduces to two Fp sqrts plus a halve.
+  - `bls12_381.decodeG1Compressed` / `bls12_381.decodeG2Compressed`:
+    parsers for the 48-byte (G1) and 96-byte (G2) compressed wire
+    forms from the IETF pairing-friendly-curves draft §C.2. Validate
+    the compression / infinity / y-sign flags, reconstruct y from the
+    curve equation, verify x < p, and pick the correct y root via
+    lexicographic comparison. Tested end-to-end against the canonical
+    G1 and G2 generator hex encodings.
   Zyli imports the package via path dependency in `build.zig.zon` and
   re-exports it through `src/crypto/zolt_arith.zig`.
   `src/crypto/zolt_arith_adapter.zig` is the seam where Hyli wire bytes
-  (compressed BLS12-381 G1 / G2 byte strings) get converted into the
-  limb representation `zolt_arith` consumes — kept in zyli so the
-  substrate stays Hyli-agnostic. Each package owns its own test step:
-  `zig build test` in zyli runs 172 tests, in `../zolt-arith` runs 66,
-  and the test runner does NOT propagate across module boundaries on
-  Zig 0.15.
+  (compressed BLS12-381 G1 / G2 byte strings) get converted into curve
+  points. `validatorPublicKeyToG1` and `signatureToG2` complete the
+  end-to-end "Hyli wire → BLS12-381 point" path; the substrate stays
+  Hyli-agnostic. Each package owns its own test step: `zig build test`
+  in zyli runs 176 tests, in `../zolt-arith` runs 94, and the test
+  runner does NOT propagate across module boundaries on Zig 0.15.
 - `src/crypto/signable.zig` pins the BLS DST string used by
   `hyli-crypto::sign_msg` and exposes `signableBytesAlloc(Msg, msg)` —
   the "what bytes get BLS-signed" rule (`borsh::to_vec(&msg)` for any
@@ -156,16 +176,20 @@ to keep the wiring honest.
 
 ## Immediate
 
-- Add G2 short-Weierstrass curve arithmetic over Fp2 (the curve
-  equation is `y² = x³ + 4(1+u)` for BLS12-381). Mirrors G1Affine
-  but with Fp2 coordinates.
-- Add G2 scalar multiplication.
+- Add the Fp6 / Fp12 tower extensions on top of Fp2. Fp12 is what the
+  BLS12-381 optimal Ate pairing lives in.
 - Add the optimal Ate pairing for BLS12-381 (Miller loop + final
-  exponentiation).
+  exponentiation). This is the largest single piece of work remaining
+  in Phase 2.
 - Add hash-to-curve to G2 (RFC 9380, suite
-  `BLS12381G2_XMD:SHA-256_SSWU_RO_`) so we can verify signatures.
-- Wire BLS verification into `src/crypto/zolt_arith_adapter.zig` and
-  hook it into a verifier in `src/crypto/`.
+  `BLS12381G2_XMD:SHA-256_SSWU_RO_`) so we can hash a message to the
+  G2 group element that gets paired against the validator's public key.
+- Add subgroup membership checks to `decodeG1Compressed` and
+  `decodeG2Compressed` (cofactor clearing). Hyli's BlstCrypto only
+  emits in-subgroup pubkeys, but adversarial peers can send anything.
+- Add a `bls.verify(pk, msg, sig)` entry point that ties everything
+  together: hash msg → G2, then check `e(pk, H(msg)) == e(g1, sig)`.
+- Wire that verifier into a `crypto/bls.zig` module in zyli.
 - Teach the observer to issue a real `Handshake::Hello` once BLS
   signing exists — the message shapes and signable bytes are already
   pinned, only the BLS surface is missing.
