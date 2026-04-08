@@ -23,7 +23,7 @@ Still missing for full BLS verification:
 - BLS verify entry point
 - Subgroup membership checks for hostile inputs
 
-**176 tests passing in zyli, 128 in zolt-arith (304 total). 127 fixtures.**
+**176 tests passing in zyli, 158 in zolt-arith (334 total). 127 fixtures.**
 
 - `build.zig` / `build.zig.zon` set up; library + executable build cleanly.
 - Borsh codec in `src/model/borsh.zig` covers primitives, options, slices,
@@ -176,6 +176,25 @@ Still missing for full BLS verification:
     the BLS12-381 trace parameter the Miller loop walks, plus a
     detailed roadmap comment for the optimal Ate pairing
     (Miller loop + final exponentiation) that's still to come.
+  - `bls12_381.fp2Frobenius` / `Fp12.conjugate`: the smallest
+    pairing primitives. The Fp2 Frobenius is just conjugation
+    (because BLS12-381's prime is `p ≡ 3 mod 4`); the Fp12
+    conjugation is what the easy part of the final exponentiation
+    uses to avoid a full `p^6` powering.
+  - `bls12_381.fp2Pow`: square-and-multiply over a generic-width
+    limb exponent. Used to compute Frobenius coefficients without
+    hand-typed tables.
+  - `bls12_381.fpFromBytes64Be` / `bls12_381.FP_2_TO_256`: reduce a
+    64-byte big-endian integer modulo `p`. Both halves are < 2^256
+    < p, so the reduction collapses to one Fp mul + one Fp add.
+- `../zolt-arith/src/hash_to_field.zig` is the start of the RFC 9380
+  hash-to-curve pipeline. `expand_message_xmd(out, msg, dst)`
+  implements RFC 9380 §5.3.1 with SHA-256. `hash_to_field_fp` /
+  `hash_to_field_fp2` use it to produce BLS12-381 Fp / Fp2 elements
+  with `L = 64` and `k = 128`. Tests are self-consistency rather
+  than cross-implementation vectors — a separate cross-check pass
+  against RFC 9380 Appendix K vectors lands once an external test
+  harness is in place.
   - `bls12_381.fpSqrt` / `bls12_381.fp2Sqrt`: square roots in Fp and
     Fp2. The Fp version uses `a^((p+1)/4)` (BLS12-381's prime is
     `p ≡ 3 mod 4`); the Fp2 version uses the standard "norm trick"
@@ -205,16 +224,21 @@ Still missing for full BLS verification:
 
 ## Immediate
 
+- Compute the BLS12-381 Frobenius coefficients for Fp6 / Fp12 at
+  comptime via `fp2Pow`, then add `Fp6.frobenius` /
+  `Fp12.frobenius` / `Fp12.frobeniusSquared`. These power the easy
+  part of the final exponentiation.
+- Add the SSWU map for Fp2 → an isogenous curve E', then the
+  11-isogeny push from E' to BLS12-381 G2. This is the third stage
+  of hash-to-curve.
+- Add G2 cofactor clearing (multiply by `h_eff` from the IETF
+  pairing-friendly-curves draft). The new `G2Projective.mul` is now
+  fast enough to handle the ~636-bit cofactor.
 - Add the optimal Ate pairing for BLS12-381 (Miller loop with line
-  function evaluation, then final exponentiation in Fp12). This is the
-  largest single piece of work remaining in Phase 2 — hundreds of
-  lines of careful code, but every primitive it needs is now in place.
-- Add hash-to-curve to G2 (RFC 9380, suite
-  `BLS12381G2_XMD:SHA-256_SSWU_RO_`) so we can hash a message to the
-  G2 group element that gets paired against the validator's public key.
-- Add subgroup membership checks to `decodeG1Compressed` and
-  `decodeG2Compressed` (cofactor clearing). Hyli's BlstCrypto only
-  emits in-subgroup pubkeys, but adversarial peers can send anything.
+  function evaluation, then final exponentiation in Fp12). This is
+  the largest single piece of work remaining in Phase 2 — hundreds
+  of lines of careful code, but every primitive it needs is now in
+  place.
 - Add a `bls.verify(pk, msg, sig)` entry point that ties everything
   together: hash msg → G2, then check `e(pk, H(msg)) == e(g1, sig)`.
 - Wire that verifier into a `crypto/bls.zig` module in zyli.
