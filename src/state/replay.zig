@@ -247,3 +247,142 @@ test "ReplayState: no contract initially" {
     try testing.expect(state.getContractState("my-contract") == null);
     try testing.expectEqual(@as(u64, 0), state.contract_count);
 }
+
+test "ReplayState: blob transaction counted" {
+    var state = ReplayState.init(testing.allocator);
+    defer state.deinit();
+
+    const tx: types.Transaction = .{
+        .version = 1,
+        .transaction_data = .{
+            .blob = .{
+                .identity = .{ .value = "alice" },
+                .blobs = &[_]types.Blob{
+                    .{
+                        .contract_name = .{ .value = "my-contract" },
+                        .data = .{ .bytes = "hello world" },
+                    },
+                },
+            },
+        },
+    };
+
+    const block: types.SignedBlock = .{
+        .data_proposals = &[_]types.LaneDataProposals{
+            .{
+                .lane_id = .{
+                    .operator = .{ .bytes = &[_]u8{0x01} ** 4 },
+                    .suffix = "lane-a",
+                },
+                .data_proposals = &[_]types.DataProposal{
+                    .{
+                        .parent_data_proposal_hash = .{ .lane_root = .{
+                            .operator = .{ .bytes = &[_]u8{0x01} ** 4 },
+                            .suffix = "lane-a",
+                        } },
+                        .txs = &[_]types.Transaction{tx},
+                    },
+                },
+            },
+        },
+        .consensus_proposal = emptyProposal(1),
+        .certificate = .{
+            .signature = .{ .bytes = &[_]u8{0xee} ** 12 },
+            .validators = &[_]types.ValidatorPublicKey{},
+        },
+    };
+
+    state.applyBlock(block);
+    try testing.expectEqual(@as(u64, 1), state.blob_tx_count);
+    try testing.expectEqual(@as(u64, 0), state.proof_tx_count);
+}
+
+test "ReplayState: verified proof registers contract" {
+    var state = ReplayState.init(testing.allocator);
+    defer state.deinit();
+
+    const register_effect: types.OnchainEffect = .{
+        .register_contract = .{
+            .verifier = .{ .value = "risc0" },
+            .program_id = .{ .bytes = "prog-123" },
+            .state_commitment = .{ .bytes = "initial-state" },
+            .contract_name = .{ .value = "my-contract" },
+            .timeout_window = null,
+        },
+    };
+
+    const hyli_output: types.HyliOutput = .{
+        .version = 1,
+        .initial_state = .{ .bytes = "" },
+        .next_state = .{ .bytes = "next" },
+        .identity = .{ .value = "alice" },
+        .index = .{ .index = 0 },
+        .blobs = .{ .blobs = &[_]types.IndexedBlobEntry{} },
+        .tx_blob_count = 1,
+        .tx_hash = .{ .bytes = "txhash" },
+        .success = true,
+        .state_reads = &[_]types.StateRead{},
+        .tx_ctx = null,
+        .onchain_effects = &[_]types.OnchainEffect{register_effect},
+        .program_outputs = &[_]u8{},
+    };
+
+    const tx: types.Transaction = .{
+        .version = 1,
+        .transaction_data = .{
+            .verified_proof = .{
+                .contract_name = .{ .value = "my-contract" },
+                .program_id = .{ .bytes = "prog-123" },
+                .verifier = .{ .value = "risc0" },
+                .proof = null,
+                .proof_hash = .{ .bytes = "proof-hash" },
+                .proof_size = 0,
+                .is_recursive = false,
+                .proven_blobs = &[_]types.BlobProofOutput{
+                    .{
+                        .blob_tx_hash = .{ .bytes = "blob-tx" },
+                        .original_proof_hash = .{ .bytes = "proof-hash" },
+                        .hyli_output = hyli_output,
+                        .program_id = .{ .bytes = "prog-123" },
+                        .verifier = .{ .value = "risc0" },
+                    },
+                },
+            },
+        },
+    };
+
+    const block: types.SignedBlock = .{
+        .data_proposals = &[_]types.LaneDataProposals{
+            .{
+                .lane_id = .{
+                    .operator = .{ .bytes = &[_]u8{0x01} ** 4 },
+                    .suffix = "lane-a",
+                },
+                .data_proposals = &[_]types.DataProposal{
+                    .{
+                        .parent_data_proposal_hash = .{ .lane_root = .{
+                            .operator = .{ .bytes = &[_]u8{0x01} ** 4 },
+                            .suffix = "lane-a",
+                        } },
+                        .txs = &[_]types.Transaction{tx},
+                    },
+                },
+            },
+        },
+        .consensus_proposal = emptyProposal(1),
+        .certificate = .{
+            .signature = .{ .bytes = &[_]u8{0xee} ** 12 },
+            .validators = &[_]types.ValidatorPublicKey{},
+        },
+    };
+
+    state.applyBlock(block);
+    try testing.expectEqual(@as(u64, 1), state.proof_tx_count);
+    try testing.expectEqual(@as(u64, 1), state.contract_count);
+
+    // The contract should now be registered.
+    const info = state.getContractState("my-contract").?;
+    try testing.expectEqualSlices(u8, "risc0", info.verifier.value);
+    try testing.expectEqualSlices(u8, "prog-123", info.program_id.bytes);
+    try testing.expectEqualSlices(u8, "initial-state", info.state_commitment.bytes);
+}
