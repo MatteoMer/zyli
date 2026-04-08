@@ -16,7 +16,7 @@
 - BLS sign (`signWithScalar`, `signBytes`, `derivePublicKeyFromScalar`)
 - Pairing bilinearity validated against e(2P,Q) = e(P,Q)^2 etc.
 
-Zyli (288 tests, 166 fixtures) has:
+Zyli (290 tests, 166 fixtures) has:
 - Borsh codec, protocol model types, exact hash functions
 - Wire layer: framing, TCP message parsing, handshake types, DA wire protocol
 - Structural message validation (QC markers, slot/view cross-checks)
@@ -39,20 +39,21 @@ Zyli (288 tests, 166 fixtures) has:
   - 3-signer aggregate (the QC verification path)
 - 153 borsh/wire/hash/crypto fixtures from `compat/fixture-gen`
 
-**507 tests total (288 zyli + 219 zolt-arith).**
+**509 tests total (290 zyli + 219 zolt-arith).**
 
 ## Immediate
 
-- Persist the observer's BLS key across runs so it can build a stable
-  validator identity for testnet observation. Today every connect
-  generates a fresh key.
-- Add fixtures for the DA historical-stream `DataAvailabilityRequest` /
-  `DataAvailabilityReply` envelopes against real testnet captures.
+- ✅ Persistent BLS identity (`--identity <path>` flag, `node/identity.zig`)
 - Wire the SignedBlock certificate verifier into the DA sync client so
   every received block gets cryptographically validated before being
   passed to the caller's callback.
 - Add structural validation to the DA sync client (block height
   monotonicity, parent hash chain continuity).
+- Add fixtures for the DA historical-stream `DataAvailabilityRequest` /
+  `DataAvailabilityReply` envelopes against real testnet captures.
+- Feed DA-synced blocks through the follower to advance chain state.
+- Verify the Verack BLS signature after handshake.
+- PING echo on the consensus connection.
 
 ## Phase 5 (in progress)
 

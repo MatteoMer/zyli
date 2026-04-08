@@ -244,9 +244,18 @@ fn observe(
             switch (decoded.value) {
                 .handshake => |hs| switch (hs) {
                     .verack => |vp| {
-                        try stdout.print("observe: handshake complete! peer={s}\n", .{
-                            vp.signed_node_connection_data.msg.name,
-                        });
+                        const peer_name = vp.signed_node_connection_data.msg.name;
+                        // Verify the peer's BLS signature on the NodeConnectionData.
+                        const verack_sig_ok = zyli.crypto.bls.verifySignedByValidator(
+                            allocator,
+                            types.NodeConnectionData,
+                            vp.signed_node_connection_data,
+                        ) catch false;
+                        if (verack_sig_ok) {
+                            try stdout.print("observe: handshake complete! peer={s} (verified)\n", .{peer_name});
+                        } else {
+                            try stdout.print("observe: handshake complete! peer={s} (BLS UNVERIFIED)\n", .{peer_name});
+                        }
                     },
                     .hello => {
                         try stdout.print("observe: expected Verack, got Hello\n", .{});
@@ -282,7 +291,13 @@ fn observe(
         frame_count += 1;
         const kind = zyli.wire.tcp_message.classifyFrame(frame);
         switch (kind) {
-            .ping => try stdout.print("frame {d}: PING ({d} bytes)\n", .{ frame_count, frame.len }),
+            .ping => {
+                try stdout.print("frame {d}: PING\n", .{frame_count});
+                // Echo the PING back to keep the connection alive.
+                const ping_framed = zyli.wire.framing.encodeFrameAlloc(allocator, zyli.wire.tcp_message.ping_magic) catch continue;
+                defer allocator.free(ping_framed);
+                stream.writeAll(ping_framed) catch {};
+            },
             .data => try printDataFrame(allocator, stdout, frame_count, frame, &follower),
         }
         try stdout.flush();
@@ -405,9 +420,17 @@ fn record(
             switch (decoded.value) {
                 .handshake => |hs| switch (hs) {
                     .verack => |vp| {
-                        try stdout.print("record: handshake complete! peer={s}\n", .{
-                            vp.signed_node_connection_data.msg.name,
-                        });
+                        const peer_name = vp.signed_node_connection_data.msg.name;
+                        const verack_sig_ok = zyli.crypto.bls.verifySignedByValidator(
+                            allocator,
+                            types.NodeConnectionData,
+                            vp.signed_node_connection_data,
+                        ) catch false;
+                        if (verack_sig_ok) {
+                            try stdout.print("record: handshake complete! peer={s} (verified)\n", .{peer_name});
+                        } else {
+                            try stdout.print("record: handshake complete! peer={s} (BLS UNVERIFIED)\n", .{peer_name});
+                        }
                     },
                     .hello => {
                         try stdout.print("record: expected Verack, got Hello\n", .{});
@@ -453,7 +476,13 @@ fn record(
 
         const kind = zyli.wire.tcp_message.classifyFrame(frame);
         switch (kind) {
-            .ping => try stdout.print("frame {d}: PING ({d} bytes)\n", .{ frame_count, frame.len }),
+            .ping => {
+                try stdout.print("frame {d}: PING\n", .{frame_count});
+                // Echo PING back.
+                const ping_framed = zyli.wire.framing.encodeFrameAlloc(allocator, zyli.wire.tcp_message.ping_magic) catch continue;
+                defer allocator.free(ping_framed);
+                stream.writeAll(ping_framed) catch {};
+            },
             .data => try stdout.print("frame {d}: DATA ({d} bytes)\n", .{ frame_count, frame.len }),
         }
         try stdout.flush();
