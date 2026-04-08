@@ -316,6 +316,34 @@ fn record(
     };
     defer stream.close();
 
+    // --- BLS handshake (same as observe) ---
+    const sk = generateEphemeralKey();
+    const now_ms: u128 = @intCast(std.time.milliTimestamp());
+    var hello_bundle = zyli.node.handshake.buildHelloFrame(
+        allocator,
+        types.ConsensusNetMessage,
+        .{
+            .sk = sk,
+            .name = "zyli-recorder",
+            .p2p_public_address = addr_port,
+            .da_public_address = "0.0.0.0:0",
+            .start_timestamp = .{ .millis = now_ms },
+            .handshake_timestamp = .{ .millis = now_ms },
+            .canal = "consensus",
+        },
+    ) catch |err| {
+        try stdout.print("record: handshake build failed: {s}\n", .{@errorName(err)});
+        return;
+    };
+    defer hello_bundle.deinit(allocator);
+
+    stream.writeAll(hello_bundle.framed) catch |err| {
+        try stdout.print("record: handshake send failed: {s}\n", .{@errorName(err)});
+        return;
+    };
+    try stdout.print("record: handshake Hello sent ({d} bytes), waiting for Verack…\n", .{hello_bundle.framed.len});
+    try stdout.flush();
+
     const StreamReader = struct {
         inner: std.net.Stream,
         pub fn read(self: *@This(), buf: []u8) !usize {
@@ -325,6 +353,57 @@ fn record(
     var stream_reader: StreamReader = .{ .inner = stream };
     var frames = zyli.wire.framing.StreamFrameReader(*StreamReader).init(allocator);
     defer frames.deinit();
+
+    // Read and validate the Verack response.
+    const verack_frame = blk: {
+        const maybe = frames.nextFrame(&stream_reader) catch |err| {
+            try stdout.print("record: handshake Verack read error: {s}\n", .{@errorName(err)});
+            return;
+        };
+        break :blk maybe orelse {
+            try stdout.print("record: peer closed before sending Verack\n", .{});
+            return;
+        };
+    };
+
+    const verack_kind = zyli.wire.tcp_message.classifyFrame(verack_frame);
+    switch (verack_kind) {
+        .ping => {
+            try stdout.print("record: expected Verack, got PING\n", .{});
+            return;
+        },
+        .data => {
+            var decoded = zyli.wire.protocol.decodeP2PTcpMessage(
+                allocator,
+                types.ConsensusNetMessage,
+                verack_frame,
+            ) catch {
+                try stdout.print("record: expected Verack, got undecipherable frame ({d} bytes)\n", .{verack_frame.len});
+                return;
+            };
+            defer decoded.deinit();
+
+            switch (decoded.value) {
+                .handshake => |hs| switch (hs) {
+                    .verack => |vp| {
+                        try stdout.print("record: handshake complete! peer={s}\n", .{
+                            vp.signed_node_connection_data.msg.name,
+                        });
+                    },
+                    .hello => {
+                        try stdout.print("record: expected Verack, got Hello\n", .{});
+                        return;
+                    },
+                },
+                .data => {
+                    try stdout.print("record: expected Verack, got Data frame\n", .{});
+                    return;
+                },
+            }
+        },
+    }
+
+    try stdout.flush();
 
     var frame_count: usize = 0;
     var total_bytes_written: usize = 0;
