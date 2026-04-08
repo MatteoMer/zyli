@@ -57,6 +57,11 @@ Source: `hyli` git revision `e41899eb582d2d25d13a97a425ec76250484d45c`.
 | `borsh/model/consensus_staking_action_bond.bin` | `hyli_model::ConsensusStakingAction` | 39 | ConsensusStakingAction::Bond { candidate=SignedByValidator<ValidatorCandidacy> } |
 | `borsh/model/consensus_staking_action_pay.bin` | `hyli_model::ConsensusStakingAction` | 24 | ConsensusStakingAction::PayFeesForDaDi { lane=default, cumul=4096 } |
 | `borsh/model/contract_name_hyli.bin` | `hyli_model::ContractName` | 8 | ContractName("hyli") |
+| `borsh/model/da_event_not_found.bin` | `hyli_model::DataAvailabilityEvent` | 9 | DataAvailabilityEvent::BlockNotFound(99) |
+| `borsh/model/da_event_signed_block.bin` | `hyli_model::DataAvailabilityEvent` | 213 | DataAvailabilityEvent::SignedBlock(signed_block_sample) |
+| `borsh/model/da_event_status.bin` | `hyli_model::DataAvailabilityEvent` | 45 | DataAvailabilityEvent::MempoolStatusEvent(...) |
+| `borsh/model/da_request_block.bin` | `hyli_model::DataAvailabilityRequest` | 9 | DataAvailabilityRequest::BlockRequest(42) |
+| `borsh/model/da_request_stream.bin` | `hyli_model::DataAvailabilityRequest` | 9 | DataAvailabilityRequest::StreamFromHeight(42) |
 | `borsh/model/data_proposal_empty.bin` | `hyli_model::DataProposal` | 15 | DataProposal::new(parent="parent", txs=[]) |
 | `borsh/model/data_proposal_parent_dp.bin` | `hyli_model::DataProposalParent` | 11 | DataProposalParent::DP("parent") |
 | `borsh/model/data_proposal_parent_lane_root.bin` | `hyli_model::DataProposalParent` | 16 | DataProposalParent::LaneRoot(LaneId::default()) |
@@ -64,6 +69,8 @@ Source: `hyli` git revision `e41899eb582d2d25d13a97a425ec76250484d45c`.
 | `borsh/model/identity_alice.bin` | `hyli_model::Identity` | 14 | Identity("alice@hyli") |
 | `borsh/model/lane_bytes_size_4096.bin` | `hyli_model::LaneBytesSize` | 8 | LaneBytesSize(4096) |
 | `borsh/model/lane_id_default.bin` | `hyli_model::LaneId` | 15 | LaneId::default() |
+| `borsh/model/mempool_status_event_created.bin` | `hyli_model::MempoolStatusEvent` | 44 | MempoolStatusEvent::DataProposalCreated(parent=parent, dp=dp-1, [tx_metadata]) |
+| `borsh/model/mempool_status_event_waiting.bin` | `hyli_model::MempoolStatusEvent` | 15 | MempoolStatusEvent::WaitingDissemination(parent=parent, txs=[]) |
 | `borsh/model/node_connection_data.bin` | `hyli_net::tcp::NodeConnectionData` | 77 | NodeConnectionData for validator-a, height=42 |
 | `borsh/model/onchain_effect_delete.bin` | `hyli_model::OnchainEffect` | 12 | OnchainEffect::DeleteContract("counter") |
 | `borsh/model/onchain_effect_register.bin` | `hyli_model::OnchainEffect` | 63 | OnchainEffect::RegisterContract(...) |
@@ -85,8 +92,13 @@ Source: `hyli` git revision `e41899eb582d2d25d13a97a425ec76250484d45c`.
 | `borsh/model/timestamp_ms_max_u64.bin` | `hyli_model::TimestampMs` | 16 | TimestampMs(u64::MAX as u128) |
 | `borsh/model/timestamp_ms_unix_epoch.bin` | `hyli_model::TimestampMs` | 16 | TimestampMs(0) — sanity for u128 layout |
 | `borsh/model/transaction_blob.bin` | `hyli_model::Transaction` | 56 | Transaction { version=1, data=Blob(...) } |
+| `borsh/model/transaction_kind_blob.bin` | `hyli_model::TransactionKind` | 1 | TransactionKind::Blob (single byte 0) |
+| `borsh/model/transaction_kind_proof.bin` | `hyli_model::TransactionKind` | 1 | TransactionKind::Proof (single byte 1) |
+| `borsh/model/transaction_kind_verified_proof.bin` | `hyli_model::TransactionKind` | 1 | TransactionKind::VerifiedProof (single byte 2) |
+| `borsh/model/transaction_metadata_blob.bin` | `hyli_model::TransactionMetadata` | 21 | TransactionMetadata { version=1, kind=Blob, id=(dp-1, tx-1) } |
 | `borsh/model/transaction_proof.bin` | `hyli_model::Transaction` | 51 | Transaction { version=1, data=Proof(...) } |
 | `borsh/model/tx_context.bin` | `hyli_model::TxContext` | 63 | TxContext { lane=default, block=[0x55;4], height=123, ts=456, chain_id=7 } |
+| `borsh/model/tx_id_sample.bin` | `hyli_model::TxId` | 16 | TxId(dp_hash="dp-1", tx_hash="tx-1") |
 | `borsh/model/validator_candidacy.bin` | `hyli_model::ValidatorCandidacy` | 18 | ValidatorCandidacy { peer_address="127.0.0.1:4242" } |
 | `borsh/model/validator_public_key.bin` | `hyli_model::ValidatorPublicKey` | 8 | ValidatorPublicKey([0x01; 4]) |
 | `borsh/model/validator_signature.bin` | `hyli_model::ValidatorSignature` | 20 | ValidatorSignature { sig=[0xff;8], validator=[0x01;4] } |

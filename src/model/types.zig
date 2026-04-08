@@ -678,6 +678,69 @@ pub const SignedBlock = struct {
     certificate: AggregateSignature,
 };
 
+// ---------------------------------------------------------------------------
+// Mempool dissemination events and DA stream messages
+// ---------------------------------------------------------------------------
+
+/// `hyli_model::TxId(pub DataProposalHash, pub TxHash)`. Tuple struct
+/// → positional Zig struct.
+pub const TxId = struct {
+    data_proposal_hash: DataProposalHash,
+    tx_hash: TxHash,
+};
+
+/// `hyli_model::TransactionKind` strum-discriminant of `TransactionData`.
+/// Variant order matches `TransactionData`: Blob, Proof, VerifiedProof.
+/// Encoded by Borsh as a single `u8`.
+pub const TransactionKind = enum(u8) {
+    blob,
+    proof,
+    verified_proof,
+};
+
+/// `hyli_model::TransactionMetadata`. Lightweight pointer the mempool
+/// dissemination event uses to refer to a transaction without dragging
+/// its full payload.
+pub const TransactionMetadata = struct {
+    version: u32,
+    transaction_kind: TransactionKind,
+    id: TxId,
+};
+
+/// Inner payload of `MempoolStatusEvent::WaitingDissemination`. The
+/// upstream Rust definition uses a struct-like enum variant, which
+/// Borsh encodes the same as a positional struct.
+pub const MempoolWaitingDissemination = struct {
+    parent_data_proposal_hash: DataProposalHash,
+    txs: []const Transaction,
+};
+
+/// Inner payload of `MempoolStatusEvent::DataProposalCreated`.
+pub const MempoolDataProposalCreated = struct {
+    parent_data_proposal_hash: DataProposalHash,
+    data_proposal_hash: DataProposalHash,
+    txs_metadatas: []const TransactionMetadata,
+};
+
+/// `hyli_model::MempoolStatusEvent`.
+pub const MempoolStatusEvent = union(enum) {
+    waiting_dissemination: MempoolWaitingDissemination,
+    data_proposal_created: MempoolDataProposalCreated,
+};
+
+/// `hyli_model::DataAvailabilityRequest`.
+pub const DataAvailabilityRequest = union(enum) {
+    stream_from_height: BlockHeight,
+    block_request: BlockHeight,
+};
+
+/// `hyli_model::DataAvailabilityEvent`.
+pub const DataAvailabilityEvent = union(enum) {
+    signed_block: SignedBlock,
+    mempool_status_event: MempoolStatusEvent,
+    block_not_found: BlockHeight,
+};
+
 test "type sizes are platform-stable where it matters" {
     // BlockHeight is u64, not usize.
     try std.testing.expectEqual(@as(usize, 8), @sizeOf(u64));

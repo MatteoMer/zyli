@@ -1357,6 +1357,193 @@ test "fixture: SignedBlock (one lane, one empty DataProposal, cp_full)" {
     try expectMatchesFixture(types.SignedBlock, value, corpus.borsh.model.signed_block_sample);
 }
 
+// ---------------------------------------------------------------------------
+// TransactionMetadata / TransactionKind / TxId
+// ---------------------------------------------------------------------------
+
+test "fixture: TxId(\"dp-1\", \"tx-1\")" {
+    const value: types.TxId = .{
+        .data_proposal_hash = .{ .bytes = "dp-1" },
+        .tx_hash = .{ .bytes = "tx-1" },
+    };
+    try expectMatchesFixture(types.TxId, value, corpus.borsh.model.tx_id_sample);
+}
+
+test "fixture: TransactionKind::Blob" {
+    try expectMatchesFixture(
+        types.TransactionKind,
+        .blob,
+        corpus.borsh.model.transaction_kind_blob,
+    );
+    try testing.expectEqualSlices(u8, &[_]u8{0}, corpus.borsh.model.transaction_kind_blob);
+}
+
+test "fixture: TransactionKind::Proof" {
+    try expectMatchesFixture(
+        types.TransactionKind,
+        .proof,
+        corpus.borsh.model.transaction_kind_proof,
+    );
+    try testing.expectEqualSlices(u8, &[_]u8{1}, corpus.borsh.model.transaction_kind_proof);
+}
+
+test "fixture: TransactionKind::VerifiedProof" {
+    try expectMatchesFixture(
+        types.TransactionKind,
+        .verified_proof,
+        corpus.borsh.model.transaction_kind_verified_proof,
+    );
+    try testing.expectEqualSlices(
+        u8,
+        &[_]u8{2},
+        corpus.borsh.model.transaction_kind_verified_proof,
+    );
+}
+
+test "fixture: TransactionMetadata(version=1, Blob, (dp-1, tx-1))" {
+    const value: types.TransactionMetadata = .{
+        .version = 1,
+        .transaction_kind = .blob,
+        .id = .{
+            .data_proposal_hash = .{ .bytes = "dp-1" },
+            .tx_hash = .{ .bytes = "tx-1" },
+        },
+    };
+    try expectMatchesFixture(
+        types.TransactionMetadata,
+        value,
+        corpus.borsh.model.transaction_metadata_blob,
+    );
+}
+
+// ---------------------------------------------------------------------------
+// MempoolStatusEvent
+// ---------------------------------------------------------------------------
+
+test "fixture: MempoolStatusEvent::WaitingDissemination" {
+    const value: types.MempoolStatusEvent = .{
+        .waiting_dissemination = .{
+            .parent_data_proposal_hash = .{ .bytes = "parent" },
+            .txs = &[_]types.Transaction{},
+        },
+    };
+    try expectMatchesFixture(
+        types.MempoolStatusEvent,
+        value,
+        corpus.borsh.model.mempool_status_event_waiting,
+    );
+}
+
+test "fixture: MempoolStatusEvent::DataProposalCreated" {
+    const value: types.MempoolStatusEvent = .{
+        .data_proposal_created = .{
+            .parent_data_proposal_hash = .{ .bytes = "parent" },
+            .data_proposal_hash = .{ .bytes = "dp-1" },
+            .txs_metadatas = &[_]types.TransactionMetadata{
+                .{
+                    .version = 1,
+                    .transaction_kind = .blob,
+                    .id = .{
+                        .data_proposal_hash = .{ .bytes = "dp-1" },
+                        .tx_hash = .{ .bytes = "tx-1" },
+                    },
+                },
+            },
+        },
+    };
+    try expectMatchesFixture(
+        types.MempoolStatusEvent,
+        value,
+        corpus.borsh.model.mempool_status_event_created,
+    );
+}
+
+// ---------------------------------------------------------------------------
+// DataAvailabilityRequest / DataAvailabilityEvent
+// ---------------------------------------------------------------------------
+
+test "fixture: DataAvailabilityRequest::StreamFromHeight(42)" {
+    const value: types.DataAvailabilityRequest = .{
+        .stream_from_height = .{ .height = 42 },
+    };
+    try expectMatchesFixture(
+        types.DataAvailabilityRequest,
+        value,
+        corpus.borsh.model.da_request_stream,
+    );
+}
+
+test "fixture: DataAvailabilityRequest::BlockRequest(42)" {
+    const value: types.DataAvailabilityRequest = .{
+        .block_request = .{ .height = 42 },
+    };
+    try expectMatchesFixture(
+        types.DataAvailabilityRequest,
+        value,
+        corpus.borsh.model.da_request_block,
+    );
+}
+
+test "fixture: DataAvailabilityEvent::SignedBlock(...)" {
+    const dps = &[_]types.DataProposal{sampleEmptyDataProposal()};
+    const lane_dps = &[_]types.LaneDataProposals{
+        .{
+            .lane_id = sampleLaneA(),
+            .data_proposals = dps,
+        },
+    };
+    const sb: types.SignedBlock = .{
+        .data_proposals = lane_dps,
+        .consensus_proposal = sampleConsensusProposalFull(),
+        .certificate = sampleAggregateSignature(),
+    };
+    const value: types.DataAvailabilityEvent = .{
+        .signed_block = sb,
+    };
+    try expectMatchesFixture(
+        types.DataAvailabilityEvent,
+        value,
+        corpus.borsh.model.da_event_signed_block,
+    );
+}
+
+test "fixture: DataAvailabilityEvent::MempoolStatusEvent(...)" {
+    const value: types.DataAvailabilityEvent = .{
+        .mempool_status_event = .{
+            .data_proposal_created = .{
+                .parent_data_proposal_hash = .{ .bytes = "parent" },
+                .data_proposal_hash = .{ .bytes = "dp-1" },
+                .txs_metadatas = &[_]types.TransactionMetadata{
+                    .{
+                        .version = 1,
+                        .transaction_kind = .blob,
+                        .id = .{
+                            .data_proposal_hash = .{ .bytes = "dp-1" },
+                            .tx_hash = .{ .bytes = "tx-1" },
+                        },
+                    },
+                },
+            },
+        },
+    };
+    try expectMatchesFixture(
+        types.DataAvailabilityEvent,
+        value,
+        corpus.borsh.model.da_event_status,
+    );
+}
+
+test "fixture: DataAvailabilityEvent::BlockNotFound(99)" {
+    const value: types.DataAvailabilityEvent = .{
+        .block_not_found = .{ .height = 99 },
+    };
+    try expectMatchesFixture(
+        types.DataAvailabilityEvent,
+        value,
+        corpus.borsh.model.da_event_not_found,
+    );
+}
+
 test "fixture: MempoolNetMessage::SyncReply" {
     const dags = &[_]types.ValidatorDag{sampleValidatorDag()};
     const value: types.MempoolNetMessage = .{

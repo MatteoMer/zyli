@@ -19,12 +19,13 @@ use borsh::BorshSerialize;
 use hyli_model::{
     utils::TimestampMs, AggregateSignature, Blob, BlobData, BlobHash, BlobIndex,
     BlobProofOutput, BlobTransaction, BlobsHashes, BlockHeight, Calldata, ConsensusProposal,
-    ConsensusProposalHash, ConsensusStakingAction, ContractName, DataProposal, DataProposalHash,
-    DataProposalParent, Hashed, HyliOutput, Identity, IndexedBlobs, LaneBytesSize, LaneId,
-    OnchainEffect, ProgramId, ProofData, ProofDataHash, ProofTransaction, RegisterContractAction,
+    ConsensusProposalHash, ConsensusStakingAction, ContractName, DataAvailabilityEvent,
+    DataAvailabilityRequest, DataProposal, DataProposalHash, DataProposalParent, Hashed,
+    HyliOutput, Identity, IndexedBlobs, LaneBytesSize, LaneId, MempoolStatusEvent, OnchainEffect,
+    ProgramId, ProofData, ProofDataHash, ProofTransaction, RegisterContractAction,
     RegisterContractEffect, Signature, Signed, SignedBlock, StateCommitment, TimeoutWindow,
-    Transaction, TransactionData, TxContext, TxHash, ValidatorCandidacy, ValidatorPublicKey,
-    ValidatorSignature, Verifier, VerifiedProofTransaction,
+    Transaction, TransactionData, TransactionKind, TransactionMetadata, TxContext, TxHash, TxId,
+    ValidatorCandidacy, ValidatorPublicKey, ValidatorSignature, Verifier, VerifiedProofTransaction,
 };
 use sha3::Digest as _;
 
@@ -2067,6 +2068,124 @@ fn main() {
         "hyli_model::SignedBlock",
         "SignedBlock with one lane, one empty DataProposal, cp_full, 2-validator aggregate",
         &signed_block_sample,
+    );
+
+    // ---- TransactionMetadata / TxId / TransactionKind --------------------
+    //
+    // The mempool dissemination events ride on top of these — pin them
+    // separately so the wire layout drift surfaces independently of the
+    // higher-level message tests.
+    let txid_sample = TxId(DataProposalHash(b"dp-1".to_vec()), TxHash(b"tx-1".to_vec()));
+    gen.write_borsh(
+        "model/tx_id_sample",
+        "hyli_model::TxId",
+        "TxId(dp_hash=\"dp-1\", tx_hash=\"tx-1\")",
+        &txid_sample,
+    );
+
+    let tx_kind_blob = TransactionKind::Blob;
+    gen.write_borsh(
+        "model/transaction_kind_blob",
+        "hyli_model::TransactionKind",
+        "TransactionKind::Blob (single byte 0)",
+        &tx_kind_blob,
+    );
+    let tx_kind_proof = TransactionKind::Proof;
+    gen.write_borsh(
+        "model/transaction_kind_proof",
+        "hyli_model::TransactionKind",
+        "TransactionKind::Proof (single byte 1)",
+        &tx_kind_proof,
+    );
+    let tx_kind_verified_proof = TransactionKind::VerifiedProof;
+    gen.write_borsh(
+        "model/transaction_kind_verified_proof",
+        "hyli_model::TransactionKind",
+        "TransactionKind::VerifiedProof (single byte 2)",
+        &tx_kind_verified_proof,
+    );
+
+    let tx_metadata_blob = TransactionMetadata {
+        version: 1,
+        transaction_kind: TransactionKind::Blob,
+        id: txid_sample.clone(),
+    };
+    gen.write_borsh(
+        "model/transaction_metadata_blob",
+        "hyli_model::TransactionMetadata",
+        "TransactionMetadata { version=1, kind=Blob, id=(dp-1, tx-1) }",
+        &tx_metadata_blob,
+    );
+
+    // ---- MempoolStatusEvent ----------------------------------------------
+    //
+    // The dissemination event the mempool publishes when it makes
+    // progress on a tx. Both variants ride on the same wire shape, so
+    // pin both.
+    let mse_waiting = MempoolStatusEvent::WaitingDissemination {
+        parent_data_proposal_hash: DataProposalHash(b"parent".to_vec()),
+        txs: vec![],
+    };
+    gen.write_borsh(
+        "model/mempool_status_event_waiting",
+        "hyli_model::MempoolStatusEvent",
+        "MempoolStatusEvent::WaitingDissemination(parent=parent, txs=[])",
+        &mse_waiting,
+    );
+
+    let mse_created = MempoolStatusEvent::DataProposalCreated {
+        parent_data_proposal_hash: DataProposalHash(b"parent".to_vec()),
+        data_proposal_hash: DataProposalHash(b"dp-1".to_vec()),
+        txs_metadatas: vec![tx_metadata_blob.clone()],
+    };
+    gen.write_borsh(
+        "model/mempool_status_event_created",
+        "hyli_model::MempoolStatusEvent",
+        "MempoolStatusEvent::DataProposalCreated(parent=parent, dp=dp-1, [tx_metadata])",
+        &mse_created,
+    );
+
+    // ---- DA stream messages -----------------------------------------------
+    //
+    // The bytes the DA listener exchanges with peers. Both variants of
+    // request and all three variants of event get fixtures so the
+    // observer can light up the DA path before any signature work
+    // lands.
+    let da_req_stream = DataAvailabilityRequest::StreamFromHeight(BlockHeight(42));
+    gen.write_borsh(
+        "model/da_request_stream",
+        "hyli_model::DataAvailabilityRequest",
+        "DataAvailabilityRequest::StreamFromHeight(42)",
+        &da_req_stream,
+    );
+    let da_req_block = DataAvailabilityRequest::BlockRequest(BlockHeight(42));
+    gen.write_borsh(
+        "model/da_request_block",
+        "hyli_model::DataAvailabilityRequest",
+        "DataAvailabilityRequest::BlockRequest(42)",
+        &da_req_block,
+    );
+
+    let da_event_signed_block = DataAvailabilityEvent::SignedBlock(signed_block_sample.clone());
+    gen.write_borsh(
+        "model/da_event_signed_block",
+        "hyli_model::DataAvailabilityEvent",
+        "DataAvailabilityEvent::SignedBlock(signed_block_sample)",
+        &da_event_signed_block,
+    );
+    let da_event_status = DataAvailabilityEvent::MempoolStatusEvent(mse_created.clone());
+    gen.write_borsh(
+        "model/da_event_status",
+        "hyli_model::DataAvailabilityEvent",
+        "DataAvailabilityEvent::MempoolStatusEvent(...)",
+        &da_event_status,
+    );
+    let da_event_not_found = DataAvailabilityEvent::BlockNotFound(BlockHeight(99));
+    gen.write_borsh(
+        "model/da_event_not_found",
+        "hyli_model::DataAvailabilityEvent",
+        "DataAvailabilityEvent::BlockNotFound(99)",
+        &da_event_not_found,
     );
 
     // ---- Crypto: BLS signable payload reference ---------------------------
