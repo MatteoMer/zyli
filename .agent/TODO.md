@@ -2,71 +2,85 @@
 
 ## Status
 
-**Phases 0–4 complete. Phase 2 BLS substrate complete. Real BLS-signed P2P handshake working.**
+**Phases 0–4 complete. Phase 2 BLS substrate complete and cross-validated against Rust blst. Phase 5 in progress.**
 
 `zolt-arith` (219 tests) provides the full BLS12-381 surface:
 - Field tower: Fp / Fp2 / Fp6 / Fp12 / Fr
 - Curves: G1Affine / G2Affine / G1Projective / G2Projective / G2HomProjective
 - Compressed point encode/decode for both G1 and G2
 - Optimal Ate Miller loop with sparse line evaluation (`fp12MulBy014`)
-- Final exponentiation (easy + hard parts)
-- Hash-to-curve for G2 (RFC 9380 SSWU + 3-isogeny + cofactor clearing)
-- BLS verify (`verify`, `verifyCompressed`, `verifyAggregate`)
+- Final exponentiation (easy + hard parts via arkworks/Gurvy chain)
+- Hash-to-curve for G2 (RFC 9380 SSWU + 3-isogeny + h_eff cofactor clearing)
+- BLS verify with multi-pairing optimization (single final exponentiation)
+- BLS aggregate verify (`verifyAggregate`)
 - BLS sign (`signWithScalar`, `signBytes`, `derivePublicKeyFromScalar`)
 - Pairing bilinearity validated against e(2P,Q) = e(P,Q)^2 etc.
 
-Zyli (266 tests, 153 fixtures) has:
+Zyli (288 tests, 166 fixtures) has:
 - Borsh codec, protocol model types, exact hash functions
-- Wire layer: framing, TCP message parsing, handshake types
+- Wire layer: framing, TCP message parsing, handshake types, DA wire protocol
 - Structural message validation (QC markers, slot/view cross-checks)
 - Consensus follower state machine (`node/follower.zig`)
 - BLS signature verification adapter wired into consensus messages
   (`crypto/bls.zig`, `crypto/consensus_verify.zig`)
 - Same-message aggregate signature verification for QCs
+- TimeoutCertificate verification with cph plumbed from embedded proposal
+- SignedBlock certificate verification (DA-side BLS check)
 - Hello handshake builder (`node/handshake.zig`) — generates ephemeral
   BLS key, signs NodeConnectionData, frames the envelope
-- `observe` issues a real BLS-signed Hello on connect, reads Verack,
-  then enters the frame-decoding loop with cryptographic verification
-  on every consensus message
-- `record` and `replay` subcommands for offline analysis
-- Staking, indexer, DA stream, and verifier-worker IPC types
+- DA sync client (`node/da_sync.zig`) — connects to a DA server,
+  sends StreamFromHeight, receives signed blocks
+- `observe`, `record`, `replay`, `da-sync` subcommands
+- `observe`/`record` issue real BLS-signed Hello handshakes on connect
+- Cross-implementation BLS test vectors verified against Rust blst:
+  - basic verify, alt-message verify, sig/msg swap rejection
+  - empty-message edge case
+  - 256-byte long-message edge case
+  - 3-signer aggregate (the QC verification path)
+- 153 borsh/wire/hash/crypto fixtures from `compat/fixture-gen`
 
-**485 tests total (266 zyli + 219 zolt-arith).**
+**507 tests total (288 zyli + 219 zolt-arith).**
 
 ## Immediate
 
-The BLS substrate is done. The handshake initiator is wired into the
-observer. The remaining short-term work is hardening and corpus growth:
-
-- Add cross-implementation BLS vectors (Rust blst-produced signatures
-  verified by Zig) to the compatibility corpus. Currently we only test
-  against self-generated (sk, pk, sig) triples — those validate the
-  algebraic identities but not byte-level wire compatibility.
-- Add fixtures for the DA historical-stream `DataAvailabilityRequest` /
-  `DataAvailabilityReply` envelopes once the follower-side code that
-  consumes them is closer to landing.
-- Plumb the embedded-cph through `verifyConsensusMessage` so that the
-  TimeoutCertificate's PrepareQC inner can also be verified, not just
-  the outer TimeoutQC.
 - Persist the observer's BLS key across runs so it can build a stable
   validator identity for testnet observation. Today every connect
   generates a fresh key.
+- Add fixtures for the DA historical-stream `DataAvailabilityRequest` /
+  `DataAvailabilityReply` envelopes against real testnet captures.
+- Wire the SignedBlock certificate verifier into the DA sync client so
+  every received block gets cryptographically validated before being
+  passed to the caller's callback.
+- Add structural validation to the DA sync client (block height
+  monotonicity, parent hash chain continuity).
 
-## Phase 5+
+## Phase 5 (in progress)
 
-- DA historical sync: request signed blocks from a peer after
-  handshake, persist locally, feed to follower.
-- State replay and native verifier support for BLS, SHA3-256, secp256k1.
-- Lane manager and mempool participation.
-- Active validator behavior (vote production, leader rotation).
-- Operational surface: admin API, observability, soak testing.
+- ✓ DA wire protocol module (encode/decode requests and events)
+- ✓ DA sync client connecting to a DA server
+- DA stream live mode after historical catchup
+- Persistence layer for received signed blocks (so the follower can
+  resume across restarts)
+- Sync request handling on the consensus side (when WE need to fetch
+  missing blocks from a peer)
+- Promote the follower from "structurally validated and BLS verified"
+  to "applied to a local state model"
+
+## Phase 6+
+
+- State replay and native verifier support for BLS, SHA3-256, secp256k1
+- External verifier-worker IPC for SP1, RISC0, Jolt
+- Lane manager and mempool participation
+- Active validator behavior (vote production, leader rotation)
+- Operational surface: admin API, observability, soak testing
 
 ## Performance hardening (after correctness)
 
-- Faster cofactor clearing on G2 via the ψ-endomorphism shortcut
-  instead of naive 8-limb scalar mul.
+- Combined Miller loop for multi-pairing (one bit walk over |x|
+  evaluating both line pairs at each step instead of two separate
+  Miller loops). Would roughly halve the verify cost again.
+- Cyclotomic squaring in the hard part of the final exponentiation
+  (currently uses plain Fp12.square which is ~4x slower).
+- Faster G2 cofactor clearing via the ψ-endomorphism shortcut from
+  the IETF draft instead of a 636-bit naive scalar multiplication.
 - Faster Fr exponent walks via NAF / sliding window.
-- Cyclotomic squaring for the hard part of the final exponentiation
-  (currently uses plain Fp12.square).
-- Multi-pairing for verifyAggregate (single Miller loop product
-  instead of two separate pairings).
