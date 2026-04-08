@@ -34,6 +34,7 @@
 const std = @import("std");
 const types = @import("../model/types.zig");
 const validate = @import("../wire/validate.zig");
+const hash_mod = @import("../model/hash.zig");
 
 /// Top-level state of the follower.
 pub const Follower = struct {
@@ -167,6 +168,45 @@ pub const Follower = struct {
             .slot = self.slot,
             .validators = c.commit_qc.aggregate.validators.len,
             .cph = c.consensus_proposal_hash,
+        } };
+    }
+
+    /// Handle a signed block from the DA stream. A signed block is a
+    /// committed proposal: it carries the `ConsensusProposal` plus the
+    /// `AggregateSignature` (certificate) that attests to it. For the
+    /// follower this is equivalent to receiving a Prepare + Commit in
+    /// one shot — it advances the slot and records the commit.
+    ///
+    /// Block ordering: blocks from the DA stream arrive in height order.
+    /// If the block's slot is at or behind our current slot, it's a
+    /// duplicate or stale — we observe it but don't advance. If it
+    /// jumps ahead, we accept it (gap-filling may arrive later).
+    pub fn handleSignedBlock(self: *Follower, block: types.SignedBlock) Event {
+        const proposal = block.consensus_proposal;
+        if (proposal.slot == 0) {
+            return .{ .rejected = .{ .reason = .structural_invalid } };
+        }
+
+        // Compute the consensus proposal hash for tracking.
+        const cph_digest = hash_mod.consensusProposalHashed(&proposal);
+        const cph: types.ConsensusProposalHash = .{ .bytes = &cph_digest };
+
+        // If we've already committed this slot or later, it's stale.
+        if (self.last_commit_slot >= proposal.slot) {
+            return .{ .observed = .{ .kind = .sync_reply } };
+        }
+
+        // Accept the block: advance slot and record commit in one step.
+        self.slot = proposal.slot;
+        self.view = 0; // DA blocks don't carry a view; reset to 0.
+        self.accepted_proposal = proposal;
+        self.last_commit_hash = cph.bytes;
+        self.last_commit_slot = proposal.slot;
+
+        return .{ .committed = .{
+            .slot = proposal.slot,
+            .validators = block.certificate.validators.len,
+            .cph = cph,
         } };
     }
 
@@ -459,4 +499,92 @@ test "Follower: Reset returns to initial state" {
     f.reset();
     try testing.expectEqual(@as(types.Slot, 0), f.slot);
     try testing.expect(f.accepted_proposal == null);
+}
+
+test "Follower: handleSignedBlock advances slot and commits" {
+    var f = Follower.init();
+    const block: types.SignedBlock = .{
+        .data_proposals = &[_]types.LaneDataProposals{},
+        .consensus_proposal = proposalAt(5, 1000),
+        .certificate = .{
+            .signature = .{ .bytes = &[_]u8{0xee} ** 12 },
+            .validators = &[_]types.ValidatorPublicKey{
+                .{ .bytes = &[_]u8{0x01} ** 4 },
+                .{ .bytes = &[_]u8{0x02} ** 4 },
+            },
+        },
+    };
+    const event = f.handleSignedBlock(block);
+    try testing.expect(event == .committed);
+    try testing.expectEqual(@as(types.Slot, 5), event.committed.slot);
+    try testing.expectEqual(@as(usize, 2), event.committed.validators);
+    try testing.expectEqual(@as(types.Slot, 5), f.slot);
+    try testing.expectEqual(@as(types.Slot, 5), f.last_commit_slot);
+    try testing.expect(f.last_commit_hash != null);
+}
+
+test "Follower: handleSignedBlock rejects slot 0" {
+    var f = Follower.init();
+    const block: types.SignedBlock = .{
+        .data_proposals = &[_]types.LaneDataProposals{},
+        .consensus_proposal = proposalAt(0, 100),
+        .certificate = .{
+            .signature = .{ .bytes = &[_]u8{0xee} ** 12 },
+            .validators = &[_]types.ValidatorPublicKey{},
+        },
+    };
+    const event = f.handleSignedBlock(block);
+    try testing.expect(event == .rejected);
+}
+
+test "Follower: handleSignedBlock ignores stale blocks" {
+    var f = Follower.init();
+    // Commit slot 5 first.
+    const block1: types.SignedBlock = .{
+        .data_proposals = &[_]types.LaneDataProposals{},
+        .consensus_proposal = proposalAt(5, 1000),
+        .certificate = .{
+            .signature = .{ .bytes = &[_]u8{0xee} ** 12 },
+            .validators = &[_]types.ValidatorPublicKey{
+                .{ .bytes = &[_]u8{0x01} ** 4 },
+            },
+        },
+    };
+    _ = f.handleSignedBlock(block1);
+
+    // Now try to apply slot 3 — should be observed but not advance.
+    const block2: types.SignedBlock = .{
+        .data_proposals = &[_]types.LaneDataProposals{},
+        .consensus_proposal = proposalAt(3, 500),
+        .certificate = .{
+            .signature = .{ .bytes = &[_]u8{0xee} ** 12 },
+            .validators = &[_]types.ValidatorPublicKey{},
+        },
+    };
+    const event = f.handleSignedBlock(block2);
+    try testing.expect(event == .observed);
+    try testing.expectEqual(@as(types.Slot, 5), f.slot); // unchanged
+}
+
+test "Follower: handleSignedBlock advances through multiple blocks" {
+    var f = Follower.init();
+    // Apply blocks 1, 2, 3 in order.
+    var slot: u64 = 1;
+    while (slot <= 3) : (slot += 1) {
+        const block: types.SignedBlock = .{
+            .data_proposals = &[_]types.LaneDataProposals{},
+            .consensus_proposal = proposalAt(slot, slot * 100),
+            .certificate = .{
+                .signature = .{ .bytes = &[_]u8{0xee} ** 12 },
+                .validators = &[_]types.ValidatorPublicKey{
+                    .{ .bytes = &[_]u8{0x01} ** 4 },
+                },
+            },
+        };
+        const event = f.handleSignedBlock(block);
+        try testing.expect(event == .committed);
+        try testing.expectEqual(slot, event.committed.slot);
+    }
+    try testing.expectEqual(@as(types.Slot, 3), f.slot);
+    try testing.expectEqual(@as(types.Slot, 3), f.last_commit_slot);
 }
