@@ -1,0 +1,16 @@
+[package]
+name = "zyli-fixture-gen"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+# Standalone — explicitly NOT part of the hyli workspace, even though it
+# borrows hyli-model as a path dependency. Cargo treats path deps as their
+# own compilation units, so the workspace MSRV does not propagate here.
+[workspace]
+
+[dependencies]
+borsh = { version = "1.6.0", features = ["derive", "rc"] }
+sha3 = "0.10"
+hex = "0.4"
+hyli-model = { path = "../../../hyli/crates/hyli-model", default-features = false, features = ["std", "full"] }

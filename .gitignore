@@ -1,3 +1,8 @@
 .zig-cache/
 zig-out/
 *.o
+
+# Rust build output for the compat fixture generator. The corpus and the
+# generated `corpus.zig` are committed; the build artifacts are not.
+compat/fixture-gen/target/
+compat/fixture-gen/Cargo.lock

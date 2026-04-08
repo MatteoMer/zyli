@@ -1,0 +1,5 @@
+[toolchain]
+# hyli-net-traits / hyli-net-macros require rustc >= 1.94. Pin the
+# fixture generator to that toolchain so contributors don't need to
+# upgrade their global default.
+channel = "1.94"

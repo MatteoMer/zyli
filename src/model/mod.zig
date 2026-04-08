@@ -8,7 +8,10 @@
 //!   compatibility tests have a single import surface.
 
 pub const borsh = @import("borsh.zig");
+pub const types = @import("types.zig");
 
 test {
     _ = borsh;
+    _ = types;
+    _ = @import("compat_test.zig");
 }
