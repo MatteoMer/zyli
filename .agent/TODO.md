@@ -2,7 +2,7 @@
 
 ## Status
 
-**Phases 0–4 complete. Phase 5 substantially complete. Phase 6 groundwork started.**
+**Phases 0–4 complete. Phase 5 substantially complete. Phase 6 started.**
 
 `zolt-arith` (219 tests) provides the full BLS12-381 surface:
 - Field tower: Fp / Fp2 / Fp6 / Fp12 / Fr
@@ -16,66 +16,55 @@
 - BLS sign (`signWithScalar`, `signBytes`, `derivePublicKeyFromScalar`)
 - Pairing bilinearity validated against e(2P,Q) = e(P,Q)^2 etc.
 
-Zyli (314 tests, 166 fixtures) has:
+Zyli (324 tests, 166 fixtures) has:
 - Borsh codec, protocol model types, exact hash functions
 - Wire layer: framing, TCP message parsing, handshake types, DA wire protocol
-- **Message encoding**: `encodeP2PTcpMessage`, `encodeConsensusData` (sending side)
+- Message encoding: `encodeP2PTcpMessage`, `encodeConsensusData` (sending side)
 - Structural message validation (QC markers, slot/view cross-checks)
-- Consensus follower state machine (`node/follower.zig`)
-  - `handleSignedBlock` for DA block ingestion
-  - Gap detection with `gap_detected` event for SyncRequest trigger
-- BLS signature verification for all message types
-- Same-message aggregate signature verification for QCs
-- TimeoutCertificate / SignedBlock certificate verification
+- Consensus follower state machine with gap detection + SyncRequest trigger
+- BLS signature verification for all message types (QCs, TCs, SignedBlocks)
 - Hello handshake builder with BLS signing
-- DA sync client with:
-  - ChainValidator (height monotonicity + parent hash chain continuity)
-  - Follower integration (blocks advance follower state)
-  - Block store persistence (`--store <path>`) with resume
-- Storage subsystem (`storage/block_store.zig`) — append-only
-  signed block file with slot→offset index, rebuild-on-open, allSlots iterator
+- DA sync client with ChainValidator, Follower integration, block store persistence
+- Storage subsystem: append-only block store with slot→offset index + allSlots
+- State subsystem: ReplayState tracks contract registry, tx counts, staking actions
+- Integration tests: 10-block chain pipeline through validator/follower/store
 - Subcommands: `observe`, `record`, `replay`, `da-sync`, `replay-store`
 - `observe` sends SyncRequests when follower detects gaps
 - Cross-implementation BLS test vectors verified against Rust blst
 - 153 borsh/wire/hash/crypto fixtures from `compat/fixture-gen`
 
-**533 tests total (314 zyli + 219 zolt-arith).**
+**543 tests total (324 zyli + 219 zolt-arith).**
 
-## Immediate
+## This Session's Deliverables
 
-- ✅ Persistent BLS identity (`--identity <path>` flag)
-- ✅ SignedBlock certificate verification wired into DA sync reporting
-- ✅ Verack BLS signature verification after handshake
-- ✅ PING echo on consensus connection (observe/record)
-- ✅ Structural validation in DA sync (height monotonicity, parent hash chain)
-- ✅ Feed DA-synced blocks through the follower to advance chain state
-- ✅ Block store persistence with resume support
-- ✅ Gap detection in follower + SyncRequest sending
-- ✅ Message encoding (encodeP2PTcpMessage, encodeConsensusData)
-- ✅ replay-store subcommand for offline block chain verification
-- Add fixtures for DA envelopes against real testnet captures
+1. ✅ handleSignedBlock in Follower for DA block ingestion (4 tests)
+2. ✅ ChainValidator: height monotonicity + parent hash chain continuity (7 tests)
+3. ✅ Follower + ChainValidator wired into syncAndReport
+4. ✅ BlockStore: append-only signed block persistence with index rebuild (7 tests)
+5. ✅ Block store integrated into DA sync with resume support (`--store`)
+6. ✅ encodeP2PTcpMessage + encodeConsensusData for sending messages (3 tests)
+7. ✅ Gap detection in Follower with gap_detected event (2 tests)
+8. ✅ SyncRequest sending on consensus channel when gaps detected
+9. ✅ replay-store subcommand for offline block chain verification
+10. ✅ Integration tests: full pipeline through chain/follower/store (5 tests)
+11. ✅ State replay engine (ReplayState) tracking contracts/txs/staking (4 tests)
+12. ✅ ReplayState wired into replay-store subcommand
 
-## Phase 5 (substantially complete)
+## Remaining Phase 5
 
-- ✓ DA wire protocol module (encode/decode requests and events)
-- ✓ DA sync client connecting to a DA server
-- ✓ ChainValidator for structural block chain validation
-- ✓ Block persistence via append-only store with resume
-- ✓ Follower state machine with handleSignedBlock + gap detection
-- ✓ SyncRequest sending on consensus channel when gaps detected
-- ✓ Message encoding for sending protocol messages
-- ✓ Offline block chain replay (replay-store subcommand)
-- DA stream live mode after historical catchup
-- SyncReply processing for gap filling (follower already handles it,
-  but end-to-end flow with a real peer needs testing)
+- DA stream live mode after historical catchup (reconnection logic)
+- SyncReply processing end-to-end with a real peer
+- DA envelope fixtures against real testnet captures
 
-## Phase 6 (next)
+## Phase 6 (in progress)
 
-- State replay of signed blocks into contract state transitions
+- ✓ ReplayState foundation (contract registry, tx counting)
+- Proper unsettled blob transaction tracking (match blobs to proofs)
+- State commitment tracking per contract (initial_state → next_state)
 - Native verifier support for BLS, SHA3-256, secp256k1
 - External verifier-worker IPC for SP1, RISC0, Jolt
-- Unsettled transaction handling
 - Settlement outcome tracking
+- Cross-validate replay results against Hyli golden vectors
 
 ## Phase 7+
 
