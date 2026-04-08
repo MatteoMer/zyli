@@ -117,6 +117,25 @@ pub fn messageLabel(comptime Data: type, value: types.P2PTcpMessage(Data)) []con
     };
 }
 
+/// Run the structural validator over a decoded `P2PTcpMessage`. Returns
+/// `true` if the message is well-formed at the wire level.
+///
+/// The validator does NOT check signatures (that needs the BLS path)
+/// or consensus state (that's the follower's job). It catches the
+/// invariants the borsh decoder can't enforce alone — most importantly
+/// the QC marker / variant cross-checks for `ConsensusNetMessage`.
+pub fn validateMessage(comptime Data: type, value: types.P2PTcpMessage(Data)) bool {
+    const validate = @import("validate.zig");
+    return switch (value) {
+        .handshake => true, // structural shape is enforced by borsh; signing is the BLS path's job
+        .data => |inner| switch (Data) {
+            types.ConsensusNetMessage => validate.validateConsensusMessage(inner),
+            types.MempoolNetMessage => validate.validateMempoolMessage(inner),
+            else => true,
+        },
+    };
+}
+
 fn dataLabel(comptime Data: type, value: Data) []const u8 {
     if (Data == []const u8) return "Data(opaque)";
     if (Data == void) return "Data(void)";
@@ -271,4 +290,42 @@ test "decodeP2PTcpMessage rejects truncated bytes (no leak)" {
         Error.InvalidEncoding,
         decodeP2PTcpMessage(testing.allocator, []const u8, truncated),
     );
+}
+
+test "validateMessage: every consensus fixture passes the structural validator" {
+    // Each net_message_* fixture is a valid encoding of a Hyli
+    // consensus message. The structural validator should accept all of
+    // them when they're wrapped as P2PTcpMessage::Data.
+    const cases = .{
+        corpus.borsh.consensus.net_message_prepare,
+        corpus.borsh.consensus.net_message_prepare_vote,
+        corpus.borsh.consensus.net_message_confirm,
+        corpus.borsh.consensus.net_message_confirm_ack,
+        corpus.borsh.consensus.net_message_commit,
+        corpus.borsh.consensus.net_message_timeout,
+        corpus.borsh.consensus.net_message_timeout_certificate,
+        corpus.borsh.consensus.net_message_validator_candidacy,
+        corpus.borsh.consensus.net_message_sync_request,
+        corpus.borsh.consensus.net_message_sync_reply,
+    };
+    inline for (cases) |inner| {
+        const wire = try testing.allocator.alloc(u8, 1 + inner.len);
+        defer testing.allocator.free(wire);
+        wire[0] = 1;
+        @memcpy(wire[1..], inner);
+        var decoded = try decodeP2PTcpMessage(
+            testing.allocator,
+            types.ConsensusNetMessage,
+            wire,
+        );
+        defer decoded.deinit();
+        try testing.expect(validateMessage(types.ConsensusNetMessage, decoded.value));
+    }
+}
+
+test "validateMessage: handshake frames pass through" {
+    const frame = corpus.wire.messages.p2p_message_handshake_hello_inner;
+    var decoded = try decodeP2PTcpMessage(testing.allocator, []const u8, frame);
+    defer decoded.deinit();
+    try testing.expect(validateMessage([]const u8, decoded.value));
 }
