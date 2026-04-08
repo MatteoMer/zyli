@@ -99,6 +99,35 @@ pub fn decodeP2PTcpMessage(
     return Decoded(Data){ .value = value, .arena = arena };
 }
 
+/// Encode a `P2PTcpMessage<Data>` into a framed byte sequence ready
+/// for TCP transmission. The result includes the 4-byte BE length
+/// prefix. Caller owns the returned allocation and must free it.
+pub fn encodeP2PTcpMessage(
+    allocator: std.mem.Allocator,
+    comptime Data: type,
+    value: types.P2PTcpMessage(Data),
+) ![]u8 {
+    const framing = @import("framing.zig");
+
+    // Borsh-encode the message.
+    var list = try borsh.encodeAlloc(allocator, types.P2PTcpMessage(Data), value);
+    const payload = try list.toOwnedSlice(allocator);
+    defer allocator.free(payload);
+
+    // Frame it with a 4-byte BE length prefix.
+    return framing.encodeFrameAlloc(allocator, payload);
+}
+
+/// Encode a consensus `Data` value as a framed `P2PTcpMessage::Data`
+/// ready for TCP. Convenience wrapper over `encodeP2PTcpMessage`.
+pub fn encodeConsensusData(
+    allocator: std.mem.Allocator,
+    data: types.ConsensusNetMessage,
+) ![]u8 {
+    const msg: types.P2PTcpMessage(types.ConsensusNetMessage) = .{ .data = data };
+    return encodeP2PTcpMessage(allocator, types.ConsensusNetMessage, msg);
+}
+
 /// Stable, short label for any `P2PTcpMessage<Data>` value. Mirrors the
 /// `#[derive(TcpMessageLabel)]` projection on the Rust side: the Handshake
 /// envelope distinguishes `Hello` vs `Verack`, and a `Data` payload
@@ -593,4 +622,76 @@ test "formatMessage: Commit prints qc validators count and cph" {
     // The fixture's commit_qc has 2 validators.
     try testing.expect(std.mem.indexOf(u8, out.items, "Commit") != null);
     try testing.expect(std.mem.indexOf(u8, out.items, "qc_validators=2") != null);
+}
+
+// ---------------------------------------------------------------------------
+// encodeP2PTcpMessage / encodeConsensusData tests
+// ---------------------------------------------------------------------------
+
+test "encodeP2PTcpMessage: round-trip decode of SyncRequest" {
+    const cph: types.ConsensusProposalHash = .{ .bytes = "test-cph-hash" };
+    const msg: types.P2PTcpMessage(types.ConsensusNetMessage) = .{
+        .data = .{ .sync_request = cph },
+    };
+    const framed = try encodeP2PTcpMessage(testing.allocator, types.ConsensusNetMessage, msg);
+    defer testing.allocator.free(framed);
+
+    // Strip the 4-byte length prefix to get the inner frame bytes.
+    try testing.expect(framed.len > 4);
+    const frame_len = std.mem.readInt(u32, framed[0..4], .big);
+    try testing.expectEqual(framed.len - 4, frame_len);
+    const frame_bytes = framed[4..];
+
+    // Decode it back.
+    var decoded = try decodeP2PTcpMessage(testing.allocator, types.ConsensusNetMessage, frame_bytes);
+    defer decoded.deinit();
+    try testing.expect(decoded.value == .data);
+    try testing.expect(decoded.value.data == .sync_request);
+    try testing.expectEqualSlices(u8, "test-cph-hash", decoded.value.data.sync_request.bytes);
+}
+
+test "encodeConsensusData: round-trip SyncRequest" {
+    const cph: types.ConsensusProposalHash = .{ .bytes = "my-hash" };
+    const framed = try encodeConsensusData(testing.allocator, .{ .sync_request = cph });
+    defer testing.allocator.free(framed);
+
+    const frame_bytes = framed[4..];
+    var decoded = try decodeP2PTcpMessage(testing.allocator, types.ConsensusNetMessage, frame_bytes);
+    defer decoded.deinit();
+    try testing.expect(decoded.value == .data);
+    try testing.expect(decoded.value.data == .sync_request);
+    try testing.expectEqualSlices(u8, "my-hash", decoded.value.data.sync_request.bytes);
+}
+
+test "encodeP2PTcpMessage: round-trip Prepare fixture" {
+    // Decode a fixture, re-encode it, decode again, and compare labels.
+    const inner = corpus.borsh.consensus.net_message_prepare;
+    const wire = try testing.allocator.alloc(u8, 1 + inner.len);
+    defer testing.allocator.free(wire);
+    wire[0] = 1;
+    @memcpy(wire[1..], inner);
+    var original = try decodeP2PTcpMessage(testing.allocator, types.ConsensusNetMessage, wire);
+    defer original.deinit();
+
+    const re_encoded = try encodeP2PTcpMessage(testing.allocator, types.ConsensusNetMessage, original.value);
+    defer testing.allocator.free(re_encoded);
+
+    // Decode the re-encoded bytes.
+    var round_tripped = try decodeP2PTcpMessage(
+        testing.allocator,
+        types.ConsensusNetMessage,
+        re_encoded[4..],
+    );
+    defer round_tripped.deinit();
+
+    try testing.expectEqualSlices(
+        u8,
+        messageLabel(types.ConsensusNetMessage, original.value),
+        messageLabel(types.ConsensusNetMessage, round_tripped.value),
+    );
+    // Check slot matches.
+    try testing.expectEqual(
+        original.value.data.prepare.proposal.slot,
+        round_tripped.value.data.prepare.proposal.slot,
+    );
 }
