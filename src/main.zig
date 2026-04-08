@@ -17,11 +17,13 @@ const Subcommand = enum {
     help,
     observe,
     replay,
+    record,
 };
 
 fn parseSubcommand(arg: []const u8) ?Subcommand {
     if (std.mem.eql(u8, arg, "observe")) return .observe;
     if (std.mem.eql(u8, arg, "replay")) return .replay;
+    if (std.mem.eql(u8, arg, "record")) return .record;
     if (std.mem.eql(u8, arg, "--help") or std.mem.eql(u8, arg, "-h") or std.mem.eql(u8, arg, "help"))
         return .help;
     return null;
@@ -35,9 +37,10 @@ fn printUsage(stdout: anytype) !void {
         \\    zyli <subcommand>
         \\
         \\SUBCOMMANDS:
-        \\    observe <host>:<port>    Connect to a Hyli peer, decode frames, print message labels.
-        \\    replay <file>            Decode framed bytes from a file using the same pipeline.
-        \\    help                     Show this help text.
+        \\    observe <host>:<port>          Connect to a Hyli peer, decode, print summaries.
+        \\    record <host>:<port> <file>    Connect, capture framed bytes to a file.
+        \\    replay <file>                  Decode framed bytes from a file using the same pipeline.
+        \\    help                           Show this help text.
         \\
         \\See docs/implementation-plan.md for the full roadmap.
         \\
@@ -83,6 +86,13 @@ pub fn main() !void {
                 return;
             }
             try replay(allocator, stdout, args[2]);
+        },
+        .record => {
+            if (args.len < 4) {
+                try stdout.writeAll("record: missing <host>:<port> <file> arguments\n");
+                return;
+            }
+            try record(allocator, stdout, args[2], args[3]);
         },
     }
 }
@@ -154,6 +164,98 @@ fn observe(
         switch (kind) {
             .ping => try stdout.print("frame {d}: PING ({d} bytes)\n", .{ frame_count, frame.len }),
             .data => try printDataFrame(allocator, stdout, frame_count, frame),
+        }
+        try stdout.flush();
+    }
+}
+
+/// Connect to a Hyli peer and write the raw framed bytes to a file. Pairs
+/// with `replay` for offline analysis: capture once, decode many times.
+///
+/// File format matches what `replay` consumes — the on-the-wire framing
+/// (4-byte BE length prefix + payload) is written verbatim. Each frame
+/// is also classified and printed to stdout in real time so the user
+/// sees progress.
+fn record(
+    allocator: std.mem.Allocator,
+    stdout: anytype,
+    addr_port: []const u8,
+    out_path: []const u8,
+) !void {
+    const sep = std.mem.lastIndexOfScalar(u8, addr_port, ':') orelse {
+        try stdout.print("record: address must be host:port, got `{s}`\n", .{addr_port});
+        return;
+    };
+    const host = addr_port[0..sep];
+    const port_str = addr_port[sep + 1 ..];
+    const port = std.fmt.parseUnsigned(u16, port_str, 10) catch {
+        try stdout.print("record: invalid port `{s}`\n", .{port_str});
+        return;
+    };
+
+    const address = std.net.Address.parseIp(host, port) catch |err| {
+        try stdout.print("record: failed to parse host `{s}`: {s}\n", .{ host, @errorName(err) });
+        return;
+    };
+
+    var out_file = std.fs.cwd().createFile(out_path, .{ .truncate = true }) catch |err| {
+        try stdout.print("record: failed to open `{s}` for write: {s}\n", .{
+            out_path,
+            @errorName(err),
+        });
+        return;
+    };
+    defer out_file.close();
+
+    try stdout.print("record: connecting to {s}:{d}, writing to {s}\n", .{ host, port, out_path });
+    try stdout.flush();
+    var stream = std.net.tcpConnectToAddress(address) catch |err| {
+        try stdout.print("record: connection failed: {s}\n", .{@errorName(err)});
+        return;
+    };
+    defer stream.close();
+
+    const StreamReader = struct {
+        inner: std.net.Stream,
+        pub fn read(self: *@This(), buf: []u8) !usize {
+            return self.inner.read(buf);
+        }
+    };
+    var stream_reader: StreamReader = .{ .inner = stream };
+    var frames = zyli.wire.framing.StreamFrameReader(*StreamReader).init(allocator);
+    defer frames.deinit();
+
+    var frame_count: usize = 0;
+    var total_bytes_written: usize = 0;
+    while (true) {
+        const maybe_frame = frames.nextFrame(&stream_reader) catch |err| {
+            try stdout.print("record: frame read error after {d} frames: {s}\n", .{
+                frame_count,
+                @errorName(err),
+            });
+            return;
+        };
+        const frame = maybe_frame orelse {
+            try stdout.print("record: peer closed cleanly after {d} frames ({d} bytes)\n", .{
+                frame_count,
+                total_bytes_written,
+            });
+            return;
+        };
+        frame_count += 1;
+        // Re-frame the payload with its 4-byte BE length prefix and write
+        // to disk. The on-the-wire bytes are exactly what `replay` will
+        // re-decode.
+        var len_prefix: [4]u8 = undefined;
+        std.mem.writeInt(u32, &len_prefix, @intCast(frame.len), .big);
+        try out_file.writeAll(&len_prefix);
+        try out_file.writeAll(frame);
+        total_bytes_written += 4 + frame.len;
+
+        const kind = zyli.wire.tcp_message.classifyFrame(frame);
+        switch (kind) {
+            .ping => try stdout.print("frame {d}: PING ({d} bytes)\n", .{ frame_count, frame.len }),
+            .data => try stdout.print("frame {d}: DATA ({d} bytes)\n", .{ frame_count, frame.len }),
         }
         try stdout.flush();
     }

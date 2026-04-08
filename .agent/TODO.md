@@ -143,8 +143,10 @@ Still missing for full BLS verification:
   at least one validator.
 - The executable has a `replay <file>` subcommand that reads framed
   bytes from disk and runs the same decode + validate + format
-  pipeline as `observe`. Useful for offline analysis of captured
-  testnet traffic.
+  pipeline as `observe`. Pairs with `record <host>:<port> <file>`
+  which connects to a peer and captures the framed bytes verbatim
+  to disk. Together they enable a "capture once, decode many times"
+  workflow for offline analysis of captured testnet traffic.
 - Verifier-worker IPC types are pinned in the corpus: `VerifyRequest`
   (verifier, proof, program_id, recursive) and `VerifyResponse`
   (ok, outputs, error) with both success and failure variants.
