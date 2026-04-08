@@ -8,6 +8,7 @@ Source: `hyli` git revision `e41899eb582d2d25d13a97a425ec76250484d45c`.
 |------|-----------|-------|-------------|
 | `borsh/consensus/commit_qc.bin` | `consensus::CommitQC` | 37 | CommitQC = QuorumCertificate<ConfirmAckMarker> |
 | `borsh/consensus/confirm_ack.bin` | `consensus::ConfirmAck` | 29 | SignedByValidator<(ConsensusProposalHash, ConfirmAckMarker)> |
+| `borsh/consensus/consensus_timeout.bin` | `consensus::ConsensusTimeout` | 91 | ConsensusTimeout = (signed_outer, TimeoutKind::NilProposal(...)) |
 | `borsh/consensus/marker_confirm_ack.bin` | `ConfirmAckMarker` | 1 | ConfirmAckMarker (single byte 1) |
 | `borsh/consensus/marker_consensus_timeout.bin` | `ConsensusTimeoutMarker` | 1 | ConsensusTimeoutMarker (single byte 2) |
 | `borsh/consensus/marker_nil_consensus_timeout.bin` | `NilConsensusTimeoutMarker` | 1 | NilConsensusTimeoutMarker (single byte 3) |
@@ -19,16 +20,28 @@ Source: `hyli` git revision `e41899eb582d2d25d13a97a425ec76250484d45c`.
 | `borsh/consensus/net_message_prepare_vote.bin` | `consensus::ConsensusNetMessage` | 30 | ConsensusNetMessage::PrepareVote(prepare_vote) |
 | `borsh/consensus/net_message_sync_reply.bin` | `consensus::ConsensusNetMessage` | 61 | ConsensusNetMessage::SyncReply((sender, cp_empty, Genesis, view=12)) |
 | `borsh/consensus/net_message_sync_request.bin` | `consensus::ConsensusNetMessage` | 9 | ConsensusNetMessage::SyncRequest(cph) |
+| `borsh/consensus/net_message_timeout.bin` | `consensus::ConsensusNetMessage` | 92 | ConsensusNetMessage::Timeout((signed_outer, NilProposal(...))) |
+| `borsh/consensus/net_message_timeout_certificate.bin` | `consensus::ConsensusNetMessage` | 92 | ConsensusNetMessage::TimeoutCertificate(TimeoutQC, TCKind::NilProposal(NilQC), 7, 2) |
 | `borsh/consensus/net_message_validator_candidacy.bin` | `consensus::ConsensusNetMessage` | 39 | ConsensusNetMessage::ValidatorCandidacy(signed_candidacy) |
 | `borsh/consensus/nil_qc.bin` | `consensus::NilQC` | 37 | NilQC = QuorumCertificate<NilConsensusTimeoutMarker> |
 | `borsh/consensus/prepare_qc.bin` | `consensus::PrepareQC` | 37 | PrepareQC = QuorumCertificate<PrepareVoteMarker> |
 | `borsh/consensus/prepare_vote.bin` | `consensus::PrepareVote` | 29 | SignedByValidator<(ConsensusProposalHash, PrepareVoteMarker)> |
+| `borsh/consensus/tc_kind_nil_proposal.bin` | `consensus::TCKind` | 38 | TCKind::NilProposal(NilQC) |
+| `borsh/consensus/tc_kind_prepare_qc.bin` | `consensus::TCKind` | 173 | TCKind::PrepareQC((PrepareQC, cp_full)) |
 | `borsh/consensus/ticket_commit_qc.bin` | `consensus::Ticket` | 38 | Ticket::CommitQC(commit_qc) |
 | `borsh/consensus/ticket_genesis.bin` | `consensus::Ticket` | 1 | Ticket::Genesis (single byte tag) |
+| `borsh/consensus/timeout_kind_nil_proposal.bin` | `consensus::TimeoutKind` | 46 | TimeoutKind::NilProposal(SignedByValidator<(slot,view,cph,NilMarker)>) |
+| `borsh/consensus/timeout_kind_prepare_qc.bin` | `consensus::TimeoutKind` | 173 | TimeoutKind::PrepareQC((PrepareQC, cp_full)) |
 | `borsh/consensus/timeout_qc.bin` | `consensus::TimeoutQC` | 37 | TimeoutQC = QuorumCertificate<ConsensusTimeoutMarker> |
 | `borsh/crypto/bls_min_pk_dst.bin` | `&[u8]` | 43 | BLS12-381 min_pk DST string used by hyli-crypto::sign_msg |
 | `borsh/crypto/signable_node_connection_data.bin` | `NodeConnectionData` | 77 | Signable bytes for SignedByValidator<NodeConnectionData> = borsh(msg) |
 | `borsh/crypto/signable_validator_candidacy.bin` | `ValidatorCandidacy` | 18 | Signable bytes for SignedByValidator<ValidatorCandidacy> = borsh(msg) |
+| `borsh/mempool/net_message_data_proposal.bin` | `mempool::MempoolNetMessage` | 78 | MempoolNetMessage::DataProposal(lane, dp_hash, dp_empty, ValidatorDAG) |
+| `borsh/mempool/net_message_data_vote.bin` | `mempool::MempoolNetMessage` | 55 | MempoolNetMessage::DataVote(lane, ValidatorDAG) |
+| `borsh/mempool/net_message_sync_reply.bin` | `mempool::MempoolNetMessage` | 74 | MempoolNetMessage::SyncReply(lane, [ValidatorDAG], dp_empty) |
+| `borsh/mempool/net_message_sync_request.bin` | `mempool::MempoolNetMessage` | 35 | MempoolNetMessage::SyncRequest(lane, Some("from"), Some("to")) |
+| `borsh/mempool/net_message_sync_request_none.bin` | `mempool::MempoolNetMessage` | 21 | MempoolNetMessage::SyncRequest(lane, None, None) — full sync |
+| `borsh/mempool/validator_dag.bin` | `mempool::ValidatorDAG` | 36 | ValidatorDAG = SignedByValidator<(DataProposalHash, LaneBytesSize)> |
 | `borsh/model/aggregate_signature_2.bin` | `hyli_model::AggregateSignature` | 36 | AggregateSignature with 2 validators |
 | `borsh/model/blob_index_3.bin` | `hyli_model::BlobIndex` | 8 | BlobIndex(3) — note: usize → u64 on the wire |
 | `borsh/model/blob_simple.bin` | `hyli_model::Blob` | 15 | Blob { contract_name="hyli", data=[1,2,3] } |
@@ -62,6 +75,7 @@ Source: `hyli` git revision `e41899eb582d2d25d13a97a425ec76250484d45c`.
 | `borsh/model/register_contract_action.bin` | `hyli_model::RegisterContractAction` | 71 | Sample RegisterContractAction with timeout + constructor metadata |
 | `borsh/model/register_contract_effect.bin` | `hyli_model::RegisterContractEffect` | 62 | RegisterContractEffect for counter w/ Some(timeout) |
 | `borsh/model/signature_8_bytes.bin` | `hyli_model::Signature` | 12 | Signature([0xff; 8]) |
+| `borsh/model/signed_block_sample.bin` | `hyli_model::SignedBlock` | 212 | SignedBlock with one lane, one empty DataProposal, cp_full, 2-validator aggregate |
 | `borsh/model/signed_node_connection_data.bin` | `Signed<NodeConnectionData, ValidatorSignature>` | 97 | SignedByValidator<NodeConnectionData> |
 | `borsh/model/signed_validator_candidacy.bin` | `hyli_model::Signed<ValidatorCandidacy, ValidatorSignature>` | 38 | SignedByValidator<ValidatorCandidacy> |
 | `borsh/model/state_commitment_4_bytes.bin` | `hyli_model::StateCommitment` | 8 | StateCommitment([0,1,2,3]) |

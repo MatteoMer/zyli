@@ -22,8 +22,8 @@ use hyli_model::{
     ConsensusStakingAction, ContractName, DataProposal, DataProposalHash, DataProposalParent,
     Hashed, HyliOutput, Identity, IndexedBlobs, LaneBytesSize, LaneId, OnchainEffect, ProgramId,
     ProofData, ProofDataHash, ProofTransaction, RegisterContractAction, RegisterContractEffect,
-    Signature, Signed, StateCommitment, TimeoutWindow, Transaction, TransactionData, TxContext,
-    TxHash, ValidatorCandidacy, ValidatorPublicKey, ValidatorSignature, Verifier,
+    Signature, Signed, SignedBlock, StateCommitment, TimeoutWindow, Transaction, TransactionData,
+    TxContext, TxHash, ValidatorCandidacy, ValidatorPublicKey, ValidatorSignature, Verifier,
     VerifiedProofTransaction,
 };
 use sha3::Digest as _;
@@ -1373,7 +1373,7 @@ fn main() {
     // ConsensusMarkerSerde declared explicitly so the byte values are
     // pinned. Upstream uses #[derive(BorshSerialize)] on a 4-variant enum,
     // which Borsh emits as a `u8` discriminant in declaration order.
-    #[derive(borsh::BorshSerialize)]
+    #[derive(borsh::BorshSerialize, Clone)]
     enum ConsensusMarkerSerdeLocal {
         PrepareVote,
         ConfirmAck,
@@ -1716,6 +1716,330 @@ fn main() {
         "consensus::ConsensusNetMessage",
         "ConsensusNetMessage::SyncReply((sender, cp_empty, Genesis, view=12))",
         &sync_reply_msg,
+    );
+
+    // ---- Consensus: Timeout / TimeoutCertificate --------------------------
+    //
+    // ConsensusTimeout = (
+    //     SignedByValidator<(Slot, View, ConsensusProposalHash, ConsensusTimeoutMarker)>,
+    //     TimeoutKind,
+    // )
+    //
+    // TimeoutKind = NilProposal(SignedByValidator<(Slot, View, cph, NilConsensusTimeoutMarker)>)
+    //             | PrepareQC((PrepareQC, ConsensusProposal))
+    //
+    // We pin both TimeoutKind variants and the two ConsensusNetMessage
+    // variants that wrap them so the follower can validate the bytes
+    // before any signature verification lands.
+
+    // The signed (slot, view, cph, marker) inner payloads — declared
+    // explicitly because Borsh encodes a 4-tuple positionally and we
+    // want the field order pinned in source.
+    type SlotViewCphMarker = (
+        SlotLocal,
+        ViewLocal,
+        ConsensusProposalHashLocal,
+        ConsensusMarkerSerdeLocal,
+    );
+
+    // Timeout::NilProposal payload — same signed envelope but with the
+    // NilConsensusTimeout marker tag instead of ConsensusTimeout.
+    let nil_proposal_signed_payload: SlotViewCphMarker = (
+        7,
+        2,
+        cph_demo.clone(),
+        ConsensusMarkerSerdeLocal::NilConsensusTimeout,
+    );
+    let nil_proposal_signed = Signed::<SlotViewCphMarker, ValidatorSignature> {
+        msg: nil_proposal_signed_payload,
+        signature: validator_sig_demo.clone(),
+    };
+
+    #[derive(borsh::BorshSerialize)]
+    enum TimeoutKindLocal {
+        NilProposal(Signed<SlotViewCphMarker, ValidatorSignature>),
+        #[allow(dead_code)]
+        PrepareQC((QuorumCertificateLocal<ConsensusMarkerSerdeLocal>, ConsensusProposal)),
+    }
+
+    let timeout_kind_nil = TimeoutKindLocal::NilProposal(nil_proposal_signed.clone());
+    gen.write_borsh(
+        "consensus/timeout_kind_nil_proposal",
+        "consensus::TimeoutKind",
+        "TimeoutKind::NilProposal(SignedByValidator<(slot,view,cph,NilMarker)>)",
+        &timeout_kind_nil,
+    );
+    let timeout_kind_prepare_qc = TimeoutKindLocal::PrepareQC((
+        QuorumCertificateLocal(qc_agg.clone(), ConsensusMarkerSerdeLocal::PrepareVote),
+        cp_full.clone(),
+    ));
+    gen.write_borsh(
+        "consensus/timeout_kind_prepare_qc",
+        "consensus::TimeoutKind",
+        "TimeoutKind::PrepareQC((PrepareQC, cp_full))",
+        &timeout_kind_prepare_qc,
+    );
+
+    // ConsensusTimeout outer payload — note the outer signed message uses
+    // the ConsensusTimeout marker tag (not Nil) regardless of the
+    // TimeoutKind underneath.
+    let consensus_timeout_outer_payload: SlotViewCphMarker = (
+        7,
+        2,
+        cph_demo.clone(),
+        ConsensusMarkerSerdeLocal::ConsensusTimeout,
+    );
+    let consensus_timeout_outer = Signed::<SlotViewCphMarker, ValidatorSignature> {
+        msg: consensus_timeout_outer_payload,
+        signature: validator_sig_demo.clone(),
+    };
+    let consensus_timeout_value = (consensus_timeout_outer, timeout_kind_nil);
+    gen.write_borsh(
+        "consensus/consensus_timeout",
+        "consensus::ConsensusTimeout",
+        "ConsensusTimeout = (signed_outer, TimeoutKind::NilProposal(...))",
+        &consensus_timeout_value,
+    );
+
+    // ConsensusNetMessage::Timeout(ConsensusTimeout). The Timeout variant
+    // is index 5 in the upstream enum, sandwiched between Commit (4) and
+    // TimeoutCertificate (6). We re-emit it now that the placeholder is
+    // gone.
+    #[derive(borsh::BorshSerialize)]
+    enum ConsensusNetMessageWithTimeout {
+        #[allow(dead_code)]
+        Prepare(ConsensusProposal, TicketLocal, ViewLocal),
+        #[allow(dead_code)]
+        PrepareVote(
+            Signed<
+                (ConsensusProposalHashLocal, ConsensusMarkerSerdeLocal),
+                ValidatorSignature,
+            >,
+        ),
+        #[allow(dead_code)]
+        Confirm(
+            QuorumCertificateLocal<ConsensusMarkerSerdeLocal>,
+            ConsensusProposalHashLocal,
+        ),
+        #[allow(dead_code)]
+        ConfirmAck(
+            Signed<
+                (ConsensusProposalHashLocal, ConsensusMarkerSerdeLocal),
+                ValidatorSignature,
+            >,
+        ),
+        #[allow(dead_code)]
+        Commit(
+            QuorumCertificateLocal<ConsensusMarkerSerdeLocal>,
+            ConsensusProposalHashLocal,
+        ),
+        Timeout((Signed<SlotViewCphMarker, ValidatorSignature>, TimeoutKindLocal)),
+        TimeoutCertificate(
+            QuorumCertificateLocal<ConsensusMarkerSerdeLocal>,
+            TCKindLocal,
+            SlotLocal,
+            ViewLocal,
+        ),
+        #[allow(dead_code)]
+        ValidatorCandidacy(Signed<ValidatorCandidacy, ValidatorSignature>),
+        #[allow(dead_code)]
+        SyncRequest(ConsensusProposalHashLocal),
+        #[allow(dead_code)]
+        SyncReply(
+            (
+                ValidatorPublicKey,
+                ConsensusProposal,
+                TicketLocal,
+                ViewLocal,
+            ),
+        ),
+    }
+
+    let timeout_outer_payload_again: SlotViewCphMarker = (
+        7,
+        2,
+        cph_demo.clone(),
+        ConsensusMarkerSerdeLocal::ConsensusTimeout,
+    );
+    let timeout_outer_again = Signed::<SlotViewCphMarker, ValidatorSignature> {
+        msg: timeout_outer_payload_again,
+        signature: validator_sig_demo.clone(),
+    };
+    let timeout_kind_nil_again = TimeoutKindLocal::NilProposal(nil_proposal_signed.clone());
+    let net_msg_timeout = ConsensusNetMessageWithTimeout::Timeout((
+        timeout_outer_again,
+        timeout_kind_nil_again,
+    ));
+    gen.write_borsh(
+        "consensus/net_message_timeout",
+        "consensus::ConsensusNetMessage",
+        "ConsensusNetMessage::Timeout((signed_outer, NilProposal(...)))",
+        &net_msg_timeout,
+    );
+
+    // TimeoutCertificate(TimeoutQC, TCKind, Slot, View). TCKind is the
+    // sibling enum of TimeoutKind for the certificate path:
+    //   NilProposal(NilQC) | PrepareQC((PrepareQC, ConsensusProposal))
+    let tc_kind_nil = TCKindLocal::NilProposal(QuorumCertificateLocal(
+        qc_agg.clone(),
+        ConsensusMarkerSerdeLocal::NilConsensusTimeout,
+    ));
+    gen.write_borsh(
+        "consensus/tc_kind_nil_proposal",
+        "consensus::TCKind",
+        "TCKind::NilProposal(NilQC)",
+        &tc_kind_nil,
+    );
+    let tc_kind_prepare_qc = TCKindLocal::PrepareQC((
+        QuorumCertificateLocal(qc_agg.clone(), ConsensusMarkerSerdeLocal::PrepareVote),
+        cp_full.clone(),
+    ));
+    gen.write_borsh(
+        "consensus/tc_kind_prepare_qc",
+        "consensus::TCKind",
+        "TCKind::PrepareQC((PrepareQC, cp_full))",
+        &tc_kind_prepare_qc,
+    );
+
+    let net_msg_timeout_certificate = ConsensusNetMessageWithTimeout::TimeoutCertificate(
+        QuorumCertificateLocal(qc_agg.clone(), ConsensusMarkerSerdeLocal::ConsensusTimeout),
+        TCKindLocal::NilProposal(QuorumCertificateLocal(
+            qc_agg.clone(),
+            ConsensusMarkerSerdeLocal::NilConsensusTimeout,
+        )),
+        7,
+        2,
+    );
+    gen.write_borsh(
+        "consensus/net_message_timeout_certificate",
+        "consensus::ConsensusNetMessage",
+        "ConsensusNetMessage::TimeoutCertificate(TimeoutQC, TCKind::NilProposal(NilQC), 7, 2)",
+        &net_msg_timeout_certificate,
+    );
+
+    // ---- Mempool network messages -----------------------------------------
+    //
+    // Mirror of `enum MempoolNetMessage` from `hyli/src/mempool.rs`:
+    //
+    //   DataProposal(LaneId, DataProposalHash, DataProposal, ValidatorDAG),
+    //   DataVote(LaneId, ValidatorDAG),
+    //   SyncRequest(LaneId, Option<DataProposalHash>, Option<DataProposalHash>),
+    //   SyncReply(LaneId, Vec<ValidatorDAG>, DataProposal),
+    //
+    // ValidatorDAG = SignedByValidator<(DataProposalHash, LaneBytesSize)>.
+
+    // ValidatorDAG inner payload type. The 2-tuple has no envelope on
+    // the wire — declared explicitly here for clarity.
+    type ValidatorDagInner = (DataProposalHash, LaneBytesSize);
+    type ValidatorDagLocal = Signed<ValidatorDagInner, ValidatorSignature>;
+
+    let dp_demo_hash = DataProposalHash(b"dp-1".to_vec());
+    let validator_dag_demo: ValidatorDagLocal = Signed::<ValidatorDagInner, ValidatorSignature> {
+        msg: (dp_demo_hash.clone(), LaneBytesSize(1024)),
+        signature: validator_sig_demo.clone(),
+    };
+    gen.write_borsh(
+        "mempool/validator_dag",
+        "mempool::ValidatorDAG",
+        "ValidatorDAG = SignedByValidator<(DataProposalHash, LaneBytesSize)>",
+        &validator_dag_demo,
+    );
+
+    let lane_demo = LaneId::with_suffix(ValidatorPublicKey(vec![0x01; 4]), "lane-a");
+    let dp_demo = DataProposal::new(DataProposalHash(b"parent".to_vec()), vec![]);
+
+    #[derive(borsh::BorshSerialize)]
+    enum MempoolNetMessageLocal {
+        DataProposal(LaneId, DataProposalHash, DataProposal, ValidatorDagLocal),
+        DataVote(LaneId, ValidatorDagLocal),
+        SyncRequest(LaneId, Option<DataProposalHash>, Option<DataProposalHash>),
+        SyncReply(LaneId, Vec<ValidatorDagLocal>, DataProposal),
+    }
+
+    let mp_data_proposal = MempoolNetMessageLocal::DataProposal(
+        lane_demo.clone(),
+        dp_demo_hash.clone(),
+        dp_demo.clone(),
+        validator_dag_demo.clone(),
+    );
+    gen.write_borsh(
+        "mempool/net_message_data_proposal",
+        "mempool::MempoolNetMessage",
+        "MempoolNetMessage::DataProposal(lane, dp_hash, dp_empty, ValidatorDAG)",
+        &mp_data_proposal,
+    );
+
+    let mp_data_vote = MempoolNetMessageLocal::DataVote(lane_demo.clone(), validator_dag_demo.clone());
+    gen.write_borsh(
+        "mempool/net_message_data_vote",
+        "mempool::MempoolNetMessage",
+        "MempoolNetMessage::DataVote(lane, ValidatorDAG)",
+        &mp_data_vote,
+    );
+
+    // SyncRequest with both bounds present (closed range).
+    let mp_sync_request = MempoolNetMessageLocal::SyncRequest(
+        lane_demo.clone(),
+        Some(DataProposalHash(b"from".to_vec())),
+        Some(DataProposalHash(b"to".to_vec())),
+    );
+    gen.write_borsh(
+        "mempool/net_message_sync_request",
+        "mempool::MempoolNetMessage",
+        "MempoolNetMessage::SyncRequest(lane, Some(\"from\"), Some(\"to\"))",
+        &mp_sync_request,
+    );
+
+    // SyncRequest with both bounds None (full sync).
+    let mp_sync_request_none = MempoolNetMessageLocal::SyncRequest(lane_demo.clone(), None, None);
+    gen.write_borsh(
+        "mempool/net_message_sync_request_none",
+        "mempool::MempoolNetMessage",
+        "MempoolNetMessage::SyncRequest(lane, None, None) — full sync",
+        &mp_sync_request_none,
+    );
+
+    let mp_sync_reply = MempoolNetMessageLocal::SyncReply(
+        lane_demo.clone(),
+        vec![validator_dag_demo.clone()],
+        dp_demo.clone(),
+    );
+    gen.write_borsh(
+        "mempool/net_message_sync_reply",
+        "mempool::MempoolNetMessage",
+        "MempoolNetMessage::SyncReply(lane, [ValidatorDAG], dp_empty)",
+        &mp_sync_reply,
+    );
+
+    // ---- DA: SignedBlock --------------------------------------------------
+    //
+    // `SignedBlock` from `crates/hyli-model/src/block.rs` is what flows
+    // through the DA stream and is what node_state replays. The wire shape
+    // is:
+    //   - data_proposals: Vec<(LaneId, Vec<DataProposal>)>
+    //   - consensus_proposal: ConsensusProposal
+    //   - certificate: AggregateSignature
+    //
+    // We pin a small but non-trivial example: one lane with one empty
+    // DataProposal, the populated cp_full proposal, and a 2-validator
+    // aggregate certificate. That keeps the byte length manageable while
+    // still exercising every field.
+    let signed_block_sample = SignedBlock {
+        data_proposals: vec![(lane_demo.clone(), vec![dp_demo.clone()])],
+        consensus_proposal: cp_full.clone(),
+        certificate: AggregateSignature {
+            signature: Signature(vec![0xee; 12]),
+            validators: vec![
+                ValidatorPublicKey(vec![0x01; 4]),
+                ValidatorPublicKey(vec![0x02; 4]),
+            ],
+        },
+    };
+    gen.write_borsh(
+        "model/signed_block_sample",
+        "hyli_model::SignedBlock",
+        "SignedBlock with one lane, one empty DataProposal, cp_full, 2-validator aggregate",
+        &signed_block_sample,
     );
 
     // ---- Crypto: BLS signable payload reference ---------------------------

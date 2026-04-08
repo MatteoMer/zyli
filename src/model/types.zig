@@ -535,29 +535,135 @@ pub const SyncReplyPayload = struct {
     view: View,
 };
 
+/// Inner payload of the `(slot, view, cph, marker)` 4-tuple that
+/// `Timeout` envelopes are signed against. Borsh encodes a 4-tuple
+/// positionally with no envelope, so a Zig struct with the same field
+/// order is wire-equivalent.
+pub const TimeoutSignedPayload = struct {
+    slot: Slot,
+    view: View,
+    consensus_proposal_hash: ConsensusProposalHash,
+    marker: ConsensusMarker,
+};
+
+/// `consensus::TimeoutKind` enum.
+pub const TimeoutKind = union(enum) {
+    nil_proposal: Signed(TimeoutSignedPayload, ValidatorSignature),
+    prepare_qc: QcWithProposal,
+};
+
+/// `consensus::ConsensusTimeout = (
+///     SignedByValidator<(Slot, View, ConsensusProposalHash, ConsensusTimeoutMarker)>,
+///     TimeoutKind,
+/// )`
+pub const ConsensusTimeout = struct {
+    outer: Signed(TimeoutSignedPayload, ValidatorSignature),
+    kind: TimeoutKind,
+};
+
+/// `TimeoutCertificate(TimeoutQC, TCKind, Slot, View)` payload of
+/// `ConsensusNetMessage`.
+pub const TimeoutCertificatePayload = struct {
+    timeout_qc: TimeoutQC,
+    tc_kind: TcKind,
+    slot: Slot,
+    view: View,
+};
+
 /// `consensus::ConsensusNetMessage` enum. Variant order matches
 /// `network.rs` exactly.
-///
-/// Note: the `Timeout` and `TimeoutCertificate` variants are not yet
-/// modeled here — they involve a multi-tuple payload over
-/// `(SignedByValidator<(Slot, View, ConsensusProposalHash, marker)>, TimeoutKind)`
-/// which is best handled when those messages get their own dedicated
-/// fixtures and follower-side validation lands. Placeholder slots keep
-/// the variant indices aligned with upstream so a future addition does
-/// not silently shift the discriminant of the variants below it.
 pub const ConsensusNetMessage = union(enum) {
     prepare: PreparePayload,
     prepare_vote: PrepareVote,
     confirm: ConfirmPayload,
     confirm_ack: ConfirmAck,
     commit: CommitPayload,
-    /// Placeholder: `Timeout(ConsensusTimeout)` — see comment above.
-    timeout: void,
-    /// Placeholder: `TimeoutCertificate(TimeoutQC, TCKind, Slot, View)`.
-    timeout_certificate: void,
+    timeout: ConsensusTimeout,
+    timeout_certificate: TimeoutCertificatePayload,
     validator_candidacy: Signed(ValidatorCandidacy, ValidatorSignature),
     sync_request: ConsensusProposalHash,
     sync_reply: SyncReplyPayload,
+};
+
+// ---------------------------------------------------------------------------
+// Mempool network messages (mirrors of hyli/src/mempool.rs)
+// ---------------------------------------------------------------------------
+
+/// `mempool::ValidatorDAG = SignedByValidator<(DataProposalHash, LaneBytesSize)>`.
+pub const ValidatorDagPayload = struct {
+    data_proposal_hash: DataProposalHash,
+    lane_bytes_size: LaneBytesSize,
+};
+
+pub const ValidatorDag = Signed(ValidatorDagPayload, ValidatorSignature);
+
+/// Variant payloads of `MempoolNetMessage`. Each tuple-shaped variant is
+/// modeled as a Zig struct with named fields for readability.
+pub const MempoolDataProposalPayload = struct {
+    lane_id: LaneId,
+    data_proposal_hash: DataProposalHash,
+    data_proposal: DataProposal,
+    validator_dag: ValidatorDag,
+};
+
+pub const MempoolDataVotePayload = struct {
+    lane_id: LaneId,
+    validator_dag: ValidatorDag,
+};
+
+pub const MempoolSyncRequestPayload = struct {
+    lane_id: LaneId,
+    from: ?DataProposalHash,
+    to: ?DataProposalHash,
+};
+
+pub const MempoolSyncReplyPayload = struct {
+    lane_id: LaneId,
+    metadata: []const ValidatorDag,
+    data_proposal: DataProposal,
+};
+
+/// `hyli_model::DataProposal` (`crates/hyli-model/src/node/mempool.rs`).
+///
+/// Field order on the wire:
+///   1. `parent_data_proposal_hash: DataProposalParent`
+///   2. `txs: Vec<Transaction>`
+///   3. `hash_cache: #[borsh(skip)]` — absent from the wire.
+pub const DataProposal = struct {
+    parent_data_proposal_hash: DataProposalParent,
+    txs: []const Transaction,
+};
+
+/// `mempool::MempoolNetMessage` enum.
+pub const MempoolNetMessage = union(enum) {
+    data_proposal: MempoolDataProposalPayload,
+    data_vote: MempoolDataVotePayload,
+    sync_request: MempoolSyncRequestPayload,
+    sync_reply: MempoolSyncReplyPayload,
+};
+
+// ---------------------------------------------------------------------------
+// Block / DA stream
+// ---------------------------------------------------------------------------
+
+/// One entry of `SignedBlock::data_proposals`. Borsh encodes the
+/// `(LaneId, Vec<DataProposal>)` 2-tuple positionally — same trick as
+/// the `IndexedBlobs` entries.
+pub const LaneDataProposals = struct {
+    lane_id: LaneId,
+    data_proposals: []const DataProposal,
+};
+
+/// `hyli_model::SignedBlock` from `crates/hyli-model/src/block.rs`.
+///
+/// Field order on the wire:
+///   1. data_proposals: Vec<(LaneId, Vec<DataProposal>)>
+///   2. consensus_proposal: ConsensusProposal
+///   3. certificate: AggregateSignature
+pub const SignedBlock = struct {
+    data_proposals: []const LaneDataProposals,
+    consensus_proposal: ConsensusProposal,
+    certificate: AggregateSignature,
 };
 
 test "type sizes are platform-stable where it matters" {

@@ -3,9 +3,10 @@
 ## Status
 
 Phase 0 corpus is broad; Phase 3 model + Phase 4 wire layer cover the
-handshake, the replay path, the consensus message family, and a
-stream-driven frame reader.
-**143 tests passing. 111 fixtures.**
+handshake, the replay path, the full consensus message family
+(including Timeout / TimeoutCertificate), the mempool message family,
+the SignedBlock shape, and a stream-driven frame reader.
+**158 tests passing. 125 fixtures.**
 
 - `build.zig` / `build.zig.zon` set up; library + executable build cleanly.
 - Borsh codec in `src/model/borsh.zig` covers primitives, options, slices,
@@ -66,11 +67,20 @@ stream-driven frame reader.
 - The consensus message family from `hyli/src/consensus/network.rs` is
   pinned in the corpus: `ConsensusMarker` enum, `QuorumCertificate`,
   `PrepareQC`/`CommitQC`/`TimeoutQC`/`NilQC` aliases, `PrepareVote`,
-  `ConfirmAck`, `Ticket::{Genesis,CommitQC,...}`, and the relevant
-  `ConsensusNetMessage` variants (`Prepare`, `PrepareVote`, `Confirm`,
-  `ConfirmAck`, `Commit`, `ValidatorCandidacy`, `SyncRequest`,
-  `SyncReply`). The Prepare/Commit QC marker-distinctness invariant
-  is asserted both in the fixture-gen and in the Zig tests.
+  `ConfirmAck`, `Ticket::{Genesis,CommitQC,...}`, `TimeoutKind`,
+  `TCKind`, `ConsensusTimeout`, and every `ConsensusNetMessage` variant
+  (`Prepare`, `PrepareVote`, `Confirm`, `ConfirmAck`, `Commit`,
+  `Timeout`, `TimeoutCertificate`, `ValidatorCandidacy`, `SyncRequest`,
+  `SyncReply`). The Prepare/Commit QC marker-distinctness invariant is
+  asserted both in the fixture-gen and in the Zig tests.
+- The mempool network family from `hyli/src/mempool.rs` is pinned in
+  the corpus: `ValidatorDAG`, `MempoolNetMessage::DataProposal`,
+  `DataVote`, `SyncRequest` (with both `Some/Some` and `None/None`
+  bound combinations), and `SyncReply`. `DataProposal` itself now
+  exists as a Zig type and is round-tripped against the existing
+  `data_proposal_empty` fixture.
+- `SignedBlock` from `crates/hyli-model/src/block.rs` has its own
+  fixture and Zig mirror — the entry point for state-replay work.
 - `src/crypto/signable.zig` pins the BLS DST string used by
   `hyli-crypto::sign_msg` and exposes `signableBytesAlloc(Msg, msg)` —
   the "what bytes get BLS-signed" rule (`borsh::to_vec(&msg)` for any
@@ -80,18 +90,12 @@ stream-driven frame reader.
 
 ## Immediate
 
-- Add `Timeout` and `TimeoutCertificate` fixtures (the multi-tuple
-  payload over `(SignedByValidator<(Slot, View, cph, marker)>,
-  TimeoutKind)`) and lift the placeholder void variants in
-  `ConsensusNetMessage`.
-- Add the mempool message family fixtures (`DataProposal`, `DataVote`,
-  `MempoolNetMessage::{SyncRequest, SyncReply, ...}`) so the lane and
-  PoDA paths get their own executable spec.
-- Add fixtures for `SignedBlock` and the DA stream messages so the
-  follower path has its own corpus before any code lands.
 - Add a tiny observer entry-point that wires `StreamFrameReader` over a
   `std.net.Stream`, decodes `P2PTcpMessage<ConsensusNetMessage>`, and
   prints message labels for live testnet traffic.
+- Add a Zig `Hashed` adapter for `SignedBlock` that mirrors the Hyli
+  `parent_hash()`/`height()` accessors — small, but the first piece of
+  storage-side work the follower path needs.
 - Begin extracting reusable arithmetic from `../zolt` into `zolt-arith`
   (`bigint`, `field`, `ec`, `msm`, `pairing`, `thread_pool`). This is
   Phase 1 of the implementation plan and unblocks BLS12-381.
@@ -99,6 +103,10 @@ stream-driven frame reader.
   `zolt-arith`, with vectors borrowed from Rust Hyli / `blst`. Phase 2.
 - Implement signed message header verification (BLS12-381 verify on
   `signable.zig`'s output) once `zolt-arith` BLS lands.
+- Add fixtures for the DA historical-stream messages
+  (`DataAvailabilityRequest`/`Reply`) once the follower-side code that
+  consumes them is closer to landing — these belong to a separate crate
+  and have their own envelope types.
 
 ## Next
 

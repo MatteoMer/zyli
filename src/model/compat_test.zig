@@ -1025,6 +1025,294 @@ test "fixture: ConsensusNetMessage::SyncRequest" {
     );
 }
 
+// ---------------------------------------------------------------------------
+// Timeout / TimeoutCertificate
+// ---------------------------------------------------------------------------
+
+fn sampleTimeoutOuterPayload() types.TimeoutSignedPayload {
+    return .{
+        .slot = 7,
+        .view = 2,
+        .consensus_proposal_hash = .{ .bytes = "cp-1" },
+        .marker = .consensus_timeout,
+    };
+}
+
+fn sampleNilProposalSignedPayload() types.TimeoutSignedPayload {
+    return .{
+        .slot = 7,
+        .view = 2,
+        .consensus_proposal_hash = .{ .bytes = "cp-1" },
+        .marker = .nil_consensus_timeout,
+    };
+}
+
+test "fixture: TimeoutKind::NilProposal" {
+    const value: types.TimeoutKind = .{
+        .nil_proposal = .{
+            .msg = sampleNilProposalSignedPayload(),
+            .signature = sampleValidatorSignature(),
+        },
+    };
+    try expectMatchesFixture(
+        types.TimeoutKind,
+        value,
+        corpus.borsh.consensus.timeout_kind_nil_proposal,
+    );
+}
+
+test "fixture: TimeoutKind::PrepareQC" {
+    const value: types.TimeoutKind = .{
+        .prepare_qc = .{
+            .quorum_certificate = .{
+                .aggregate = sampleAggregateSignature(),
+                .marker = .prepare_vote,
+            },
+            .proposal = sampleConsensusProposalFull(),
+        },
+    };
+    try expectMatchesFixture(
+        types.TimeoutKind,
+        value,
+        corpus.borsh.consensus.timeout_kind_prepare_qc,
+    );
+}
+
+test "fixture: ConsensusTimeout = (signed_outer, NilProposal)" {
+    const value: types.ConsensusTimeout = .{
+        .outer = .{
+            .msg = sampleTimeoutOuterPayload(),
+            .signature = sampleValidatorSignature(),
+        },
+        .kind = .{
+            .nil_proposal = .{
+                .msg = sampleNilProposalSignedPayload(),
+                .signature = sampleValidatorSignature(),
+            },
+        },
+    };
+    try expectMatchesFixture(
+        types.ConsensusTimeout,
+        value,
+        corpus.borsh.consensus.consensus_timeout,
+    );
+}
+
+test "fixture: ConsensusNetMessage::Timeout" {
+    const value: types.ConsensusNetMessage = .{
+        .timeout = .{
+            .outer = .{
+                .msg = sampleTimeoutOuterPayload(),
+                .signature = sampleValidatorSignature(),
+            },
+            .kind = .{
+                .nil_proposal = .{
+                    .msg = sampleNilProposalSignedPayload(),
+                    .signature = sampleValidatorSignature(),
+                },
+            },
+        },
+    };
+    try expectMatchesFixture(
+        types.ConsensusNetMessage,
+        value,
+        corpus.borsh.consensus.net_message_timeout,
+    );
+}
+
+test "fixture: TCKind::NilProposal(NilQC)" {
+    const value: types.TcKind = .{
+        .nil_proposal = .{
+            .aggregate = sampleAggregateSignature(),
+            .marker = .nil_consensus_timeout,
+        },
+    };
+    try expectMatchesFixture(
+        types.TcKind,
+        value,
+        corpus.borsh.consensus.tc_kind_nil_proposal,
+    );
+}
+
+test "fixture: TCKind::PrepareQC((PrepareQC, ConsensusProposal))" {
+    const value: types.TcKind = .{
+        .prepare_qc = .{
+            .quorum_certificate = .{
+                .aggregate = sampleAggregateSignature(),
+                .marker = .prepare_vote,
+            },
+            .proposal = sampleConsensusProposalFull(),
+        },
+    };
+    try expectMatchesFixture(
+        types.TcKind,
+        value,
+        corpus.borsh.consensus.tc_kind_prepare_qc,
+    );
+}
+
+test "fixture: ConsensusNetMessage::TimeoutCertificate" {
+    const value: types.ConsensusNetMessage = .{
+        .timeout_certificate = .{
+            .timeout_qc = .{
+                .aggregate = sampleAggregateSignature(),
+                .marker = .consensus_timeout,
+            },
+            .tc_kind = .{
+                .nil_proposal = .{
+                    .aggregate = sampleAggregateSignature(),
+                    .marker = .nil_consensus_timeout,
+                },
+            },
+            .slot = 7,
+            .view = 2,
+        },
+    };
+    try expectMatchesFixture(
+        types.ConsensusNetMessage,
+        value,
+        corpus.borsh.consensus.net_message_timeout_certificate,
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Mempool messages
+// ---------------------------------------------------------------------------
+
+fn sampleValidatorDag() types.ValidatorDag {
+    return .{
+        .msg = .{
+            .data_proposal_hash = .{ .bytes = "dp-1" },
+            .lane_bytes_size = .{ .bytes = 1024 },
+        },
+        .signature = sampleValidatorSignature(),
+    };
+}
+
+fn sampleLaneA() types.LaneId {
+    return .{
+        .operator = .{ .bytes = &[_]u8{0x01} ** 4 },
+        .suffix = "lane-a",
+    };
+}
+
+fn sampleEmptyDataProposal() types.DataProposal {
+    return .{
+        .parent_data_proposal_hash = .{ .dp = .{ .bytes = "parent" } },
+        .txs = &[_]types.Transaction{},
+    };
+}
+
+test "fixture: DataProposal (empty txs)" {
+    // Cross-check the new Zig DataProposal struct against the existing
+    // borsh fixture generated via DataProposal::new("parent", []).
+    const value: types.DataProposal = .{
+        .parent_data_proposal_hash = .{ .dp = .{ .bytes = "parent" } },
+        .txs = &[_]types.Transaction{},
+    };
+    try expectMatchesFixture(types.DataProposal, value, corpus.borsh.model.data_proposal_empty);
+}
+
+test "fixture: ValidatorDAG = SignedByValidator<(dp_hash, lane_size)>" {
+    try expectMatchesFixture(
+        types.ValidatorDag,
+        sampleValidatorDag(),
+        corpus.borsh.mempool.validator_dag,
+    );
+}
+
+test "fixture: MempoolNetMessage::DataProposal" {
+    const value: types.MempoolNetMessage = .{
+        .data_proposal = .{
+            .lane_id = sampleLaneA(),
+            .data_proposal_hash = .{ .bytes = "dp-1" },
+            .data_proposal = sampleEmptyDataProposal(),
+            .validator_dag = sampleValidatorDag(),
+        },
+    };
+    try expectMatchesFixture(
+        types.MempoolNetMessage,
+        value,
+        corpus.borsh.mempool.net_message_data_proposal,
+    );
+}
+
+test "fixture: MempoolNetMessage::DataVote" {
+    const value: types.MempoolNetMessage = .{
+        .data_vote = .{
+            .lane_id = sampleLaneA(),
+            .validator_dag = sampleValidatorDag(),
+        },
+    };
+    try expectMatchesFixture(
+        types.MempoolNetMessage,
+        value,
+        corpus.borsh.mempool.net_message_data_vote,
+    );
+}
+
+test "fixture: MempoolNetMessage::SyncRequest (Some, Some)" {
+    const value: types.MempoolNetMessage = .{
+        .sync_request = .{
+            .lane_id = sampleLaneA(),
+            .from = .{ .bytes = "from" },
+            .to = .{ .bytes = "to" },
+        },
+    };
+    try expectMatchesFixture(
+        types.MempoolNetMessage,
+        value,
+        corpus.borsh.mempool.net_message_sync_request,
+    );
+}
+
+test "fixture: MempoolNetMessage::SyncRequest (None, None)" {
+    const value: types.MempoolNetMessage = .{
+        .sync_request = .{
+            .lane_id = sampleLaneA(),
+            .from = null,
+            .to = null,
+        },
+    };
+    try expectMatchesFixture(
+        types.MempoolNetMessage,
+        value,
+        corpus.borsh.mempool.net_message_sync_request_none,
+    );
+}
+
+test "fixture: SignedBlock (one lane, one empty DataProposal, cp_full)" {
+    const dps = &[_]types.DataProposal{sampleEmptyDataProposal()};
+    const lane_dps = &[_]types.LaneDataProposals{
+        .{
+            .lane_id = sampleLaneA(),
+            .data_proposals = dps,
+        },
+    };
+    const value: types.SignedBlock = .{
+        .data_proposals = lane_dps,
+        .consensus_proposal = sampleConsensusProposalFull(),
+        .certificate = sampleAggregateSignature(),
+    };
+    try expectMatchesFixture(types.SignedBlock, value, corpus.borsh.model.signed_block_sample);
+}
+
+test "fixture: MempoolNetMessage::SyncReply" {
+    const dags = &[_]types.ValidatorDag{sampleValidatorDag()};
+    const value: types.MempoolNetMessage = .{
+        .sync_reply = .{
+            .lane_id = sampleLaneA(),
+            .metadata = dags,
+            .data_proposal = sampleEmptyDataProposal(),
+        },
+    };
+    try expectMatchesFixture(
+        types.MempoolNetMessage,
+        value,
+        corpus.borsh.mempool.net_message_sync_reply,
+    );
+}
+
 test "fixture: ConsensusNetMessage::SyncReply" {
     const value: types.ConsensusNetMessage = .{
         .sync_reply = .{
