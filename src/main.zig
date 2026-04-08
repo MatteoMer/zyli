@@ -150,10 +150,10 @@ fn observe(
 }
 
 /// Decode a `P2PTcpMessage<ConsensusNetMessage>` from a Data frame and
-/// print its label plus the structural validation verdict. We assume
-/// the canal is `"p2p"` for now — until the observer learns to track
-/// per-canal context, treating every Data frame as a consensus
-/// message is the right default.
+/// print a detailed one-line summary plus the structural validation
+/// verdict. We assume the canal is `"p2p"` for now — until the
+/// observer learns to track per-canal context, treating every Data
+/// frame as a consensus message is the right default.
 fn printDataFrame(
     allocator: std.mem.Allocator,
     stdout: anytype,
@@ -173,19 +173,16 @@ fn printDataFrame(
         return;
     };
     defer decoded.deinit();
-    const label = zyli.wire.protocol.messageLabel(
-        zyli.model.types.ConsensusNetMessage,
-        decoded.value,
-    );
     const ok = zyli.wire.protocol.validateMessage(
         zyli.model.types.ConsensusNetMessage,
         decoded.value,
     );
     const verdict: []const u8 = if (ok) "ok" else "INVALID";
-    try stdout.print("frame {d}: DATA ({d} bytes) — {s} [{s}]\n", .{
-        frame_index,
-        frame.len,
-        label,
-        verdict,
-    });
+    try stdout.print("frame {d}: DATA ({d} bytes) — ", .{ frame_index, frame.len });
+    try zyli.wire.protocol.formatMessage(
+        zyli.model.types.ConsensusNetMessage,
+        decoded.value,
+        stdout,
+    );
+    try stdout.print(" [{s}]\n", .{verdict});
 }

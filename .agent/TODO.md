@@ -23,7 +23,7 @@ Still missing for full BLS verification:
 - BLS verify entry point
 - Subgroup membership checks for hostile inputs
 
-**177 tests passing in zyli, 171 in zolt-arith (348 total). 127 fixtures.**
+**210 tests passing in zyli, 171 in zolt-arith (381 total). 139 fixtures.**
 
 - `build.zig` / `build.zig.zon` set up; library + executable build cleanly.
 - Borsh codec in `src/model/borsh.zig` covers primitives, options, slices,
@@ -104,10 +104,33 @@ Still missing for full BLS verification:
   end-to-end through the borsh codec.
 - `src/main.zig` is now a small executable with an `observe` subcommand
   that connects to a TCP peer, drives `StreamFrameReader` over a real
-  `std.net.Stream`, and prints either `PING` or the decoded
-  `ConsensusNetMessage` variant label (`Prepare`, `PrepareVote`, …) for
-  each frame. It does NOT speak the BLS handshake yet — that lands once
-  `zolt-arith` provides BLS12-381 verification.
+  `std.net.Stream`, decodes each frame as a `P2PTcpMessage<ConsensusNetMessage>`,
+  prints a detailed one-line summary (slot/view/cph for consensus,
+  canal/name for handshake) plus a structural validation verdict
+  (`[ok]` / `[INVALID]`). It does NOT speak the BLS handshake yet —
+  that lands once `zolt-arith` provides BLS12-381 verification.
+- `src/wire/protocol.zig` exposes:
+  - `decodeP2PTcpMessage(allocator, Data, frame_bytes)` returning a
+    `Decoded(Data)` value backed by an internal arena allocator.
+  - `messageLabel(Data, value)` mirroring upstream `IntoStaticStr`.
+  - `validateMessage(Data, value)` running the structural validator
+    on the inner payload.
+  - `formatMessage(Data, value, writer)` printing a detailed one-line
+    description (slot/view, hashes, validator counts).
+- `src/wire/validate.zig` enforces the QC marker / variant
+  cross-check from
+  hyli/src/consensus/network.rs::quorum_certificate_cannot_be_reused_across_steps:
+  Confirm carries a PrepareQC, Commit carries a CommitQC, the inner
+  Signed marker matches the outer ConsensusNetMessage variant,
+  TimeoutCertificate's TCKind uses the matching markers, and
+  Ticket::ForcedCommitQC is rejected when received from a peer
+  (it's an internal-only variant).
+- The DA stream and mempool dissemination event types are pinned in
+  the corpus: `TxId`, `TransactionKind`, `TransactionMetadata`,
+  `MempoolStatusEvent::{WaitingDissemination, DataProposalCreated}`,
+  `DataAvailabilityRequest::{StreamFromHeight, BlockRequest}`, and
+  `DataAvailabilityEvent::{SignedBlock, MempoolStatusEvent, BlockNotFound}`.
+  All have Zig mirrors and round-trip tests.
 - `src/wire/protocol.zig` exposes a `decodeP2PTcpMessage(allocator,
   Data, frame_bytes)` helper that returns a `Decoded(Data)` value
   backed by an internal arena allocator. The arena shape exists

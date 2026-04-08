@@ -173,6 +173,170 @@ pub fn mempoolNetMessageLabel(msg: types.MempoolNetMessage) []const u8 {
     };
 }
 
+/// Print a richer one-line description of any `P2PTcpMessage<Data>`
+/// to a `std.io.Writer`-shaped sink. The output goes beyond the bare
+/// variant label and includes the most relevant slot/view/hash fields.
+///
+/// Example outputs:
+///   Handshake::Hello(canal=p2p, name=validator-a, ts=1700000000001)
+///   ConsensusNetMessage::Prepare(slot=7, view=3, ticket=Genesis)
+///   ConsensusNetMessage::PrepareVote(cph=...)
+///
+/// `Writer` is comptime so the same code paths work for stdout, a
+/// fixed-buffer test sink, or any other writer-shaped value.
+pub fn formatMessage(
+    comptime Data: type,
+    value: types.P2PTcpMessage(Data),
+    writer: anytype,
+) !void {
+    switch (value) {
+        .handshake => |hs| switch (hs) {
+            .hello => |hp| try writer.print("Handshake::Hello(canal={s}, name={s}, ts={d})", .{
+                hp.canal.name,
+                hp.signed_node_connection_data.msg.name,
+                hp.timestamp.millis,
+            }),
+            .verack => |hp| try writer.print("Handshake::Verack(canal={s}, name={s}, ts={d})", .{
+                hp.canal.name,
+                hp.signed_node_connection_data.msg.name,
+                hp.timestamp.millis,
+            }),
+        },
+        .data => |inner| try formatData(Data, inner, writer),
+    }
+}
+
+fn formatData(comptime Data: type, value: Data, writer: anytype) !void {
+    if (Data == []const u8) {
+        try writer.print("Data({d} bytes)", .{value.len});
+        return;
+    }
+    if (Data == types.ConsensusNetMessage) {
+        return formatConsensusNetMessage(value, writer);
+    }
+    if (Data == types.MempoolNetMessage) {
+        return formatMempoolNetMessage(value, writer);
+    }
+    @compileError("formatData: unsupported inner Data type " ++ @typeName(Data));
+}
+
+fn writeHashHex(bytes: []const u8, writer: anytype) !void {
+    // The on-wire ConsensusProposalHash is short (≤ 32 bytes); print
+    // it in full as lowercase hex. Truncate to 16 bytes if longer
+    // just to keep one-line summaries readable.
+    const len = @min(bytes.len, 16);
+    for (bytes[0..len]) |b| try writer.print("{x:0>2}", .{b});
+    if (bytes.len > 16) try writer.print("..", .{});
+}
+
+fn formatConsensusNetMessage(msg: types.ConsensusNetMessage, writer: anytype) !void {
+    switch (msg) {
+        .prepare => |p| {
+            try writer.print("ConsensusNetMessage::Prepare(slot={d}, view={d}, ticket=", .{
+                p.proposal.slot,
+                p.view,
+            });
+            try formatTicket(p.ticket, writer);
+            try writer.print(")", .{});
+        },
+        .prepare_vote => |pv| {
+            try writer.print("ConsensusNetMessage::PrepareVote(cph=", .{});
+            try writeHashHex(pv.msg.consensus_proposal_hash.bytes, writer);
+            try writer.print(")", .{});
+        },
+        .confirm => |c| {
+            try writer.print("ConsensusNetMessage::Confirm(qc_validators={d}, cph=", .{
+                c.prepare_qc.aggregate.validators.len,
+            });
+            try writeHashHex(c.consensus_proposal_hash.bytes, writer);
+            try writer.print(")", .{});
+        },
+        .confirm_ack => |ca| {
+            try writer.print("ConsensusNetMessage::ConfirmAck(cph=", .{});
+            try writeHashHex(ca.msg.consensus_proposal_hash.bytes, writer);
+            try writer.print(")", .{});
+        },
+        .commit => |c| {
+            try writer.print("ConsensusNetMessage::Commit(qc_validators={d}, cph=", .{
+                c.commit_qc.aggregate.validators.len,
+            });
+            try writeHashHex(c.consensus_proposal_hash.bytes, writer);
+            try writer.print(")", .{});
+        },
+        .timeout => |t| {
+            try writer.print("ConsensusNetMessage::Timeout(slot={d}, view={d}, kind=", .{
+                t.outer.msg.slot,
+                t.outer.msg.view,
+            });
+            switch (t.kind) {
+                .nil_proposal => try writer.print("NilProposal", .{}),
+                .prepare_qc => try writer.print("PrepareQC", .{}),
+            }
+            try writer.print(")", .{});
+        },
+        .timeout_certificate => |tc| {
+            try writer.print(
+                "ConsensusNetMessage::TimeoutCertificate(slot={d}, view={d}, kind=",
+                .{ tc.slot, tc.view },
+            );
+            switch (tc.tc_kind) {
+                .nil_proposal => try writer.print("NilProposal", .{}),
+                .prepare_qc => try writer.print("PrepareQC", .{}),
+            }
+            try writer.print(")", .{});
+        },
+        .validator_candidacy => |signed| {
+            try writer.print("ConsensusNetMessage::ValidatorCandidacy(peer={s})", .{
+                signed.msg.peer_address,
+            });
+        },
+        .sync_request => |cph| {
+            try writer.print("ConsensusNetMessage::SyncRequest(cph=", .{});
+            try writeHashHex(cph.bytes, writer);
+            try writer.print(")", .{});
+        },
+        .sync_reply => |sr| {
+            try writer.print(
+                "ConsensusNetMessage::SyncReply(slot={d}, view={d})",
+                .{ sr.proposal.slot, sr.view },
+            );
+        },
+    }
+}
+
+fn formatTicket(ticket: types.Ticket, writer: anytype) !void {
+    switch (ticket) {
+        .genesis => try writer.print("Genesis", .{}),
+        .commit_qc => try writer.print("CommitQC", .{}),
+        .timeout_qc => try writer.print("TimeoutQC", .{}),
+        .forced_commit_qc => |v| try writer.print("ForcedCommitQC({d})", .{v}),
+    }
+}
+
+fn formatMempoolNetMessage(msg: types.MempoolNetMessage, writer: anytype) !void {
+    switch (msg) {
+        .data_proposal => |dp| {
+            try writer.print("MempoolNetMessage::DataProposal(lane={s}, dp=", .{dp.lane_id.suffix});
+            try writeHashHex(dp.data_proposal_hash.bytes, writer);
+            try writer.print(")", .{});
+        },
+        .data_vote => |dv| {
+            try writer.print("MempoolNetMessage::DataVote(lane={s}, dp=", .{dv.lane_id.suffix});
+            try writeHashHex(dv.validator_dag.msg.data_proposal_hash.bytes, writer);
+            try writer.print(")", .{});
+        },
+        .sync_request => |sr| {
+            try writer.print("MempoolNetMessage::SyncRequest(lane={s})", .{sr.lane_id.suffix});
+        },
+        .sync_reply => |sr| {
+            try writer.print(
+                "MempoolNetMessage::SyncReply(lane={s}, dags={d})",
+                .{ sr.lane_id.suffix, sr.metadata.len },
+            );
+        },
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
@@ -328,4 +492,105 @@ test "validateMessage: handshake frames pass through" {
     var decoded = try decodeP2PTcpMessage(testing.allocator, []const u8, frame);
     defer decoded.deinit();
     try testing.expect(validateMessage([]const u8, decoded.value));
+}
+
+// ---------------------------------------------------------------------------
+// formatMessage tests — exercise the writer-shaped formatter against
+// each major variant. We use std.ArrayList as a sink and check that
+// the output contains the expected substrings.
+// ---------------------------------------------------------------------------
+
+const ArrayListSink = struct {
+    list: *std.ArrayList(u8),
+    allocator: std.mem.Allocator,
+
+    pub fn print(self: ArrayListSink, comptime fmt: []const u8, args: anytype) !void {
+        var buf: [256]u8 = undefined;
+        const out = try std.fmt.bufPrint(&buf, fmt, args);
+        try self.list.appendSlice(self.allocator, out);
+    }
+};
+
+fn formatToList(
+    allocator: std.mem.Allocator,
+    comptime Data: type,
+    value: types.P2PTcpMessage(Data),
+) !std.ArrayList(u8) {
+    var list: std.ArrayList(u8) = .empty;
+    errdefer list.deinit(allocator);
+    const sink: ArrayListSink = .{ .list = &list, .allocator = allocator };
+    try formatMessage(Data, value, sink);
+    return list;
+}
+
+test "formatMessage: ConsensusNetMessage::Prepare prints slot/view" {
+    const inner = corpus.borsh.consensus.net_message_prepare;
+    const wire = try testing.allocator.alloc(u8, 1 + inner.len);
+    defer testing.allocator.free(wire);
+    wire[0] = 1;
+    @memcpy(wire[1..], inner);
+    var decoded = try decodeP2PTcpMessage(
+        testing.allocator,
+        types.ConsensusNetMessage,
+        wire,
+    );
+    defer decoded.deinit();
+    var out = try formatToList(testing.allocator, types.ConsensusNetMessage, decoded.value);
+    defer out.deinit(testing.allocator);
+    // The fixture's cp_full has slot=7 and we set view=7 in the
+    // fixture-gen, so the output should mention both.
+    try testing.expect(std.mem.indexOf(u8, out.items, "Prepare") != null);
+    try testing.expect(std.mem.indexOf(u8, out.items, "slot=7") != null);
+    try testing.expect(std.mem.indexOf(u8, out.items, "view=7") != null);
+    try testing.expect(std.mem.indexOf(u8, out.items, "Genesis") != null);
+}
+
+test "formatMessage: PrepareVote prints cph hex" {
+    const inner = corpus.borsh.consensus.net_message_prepare_vote;
+    const wire = try testing.allocator.alloc(u8, 1 + inner.len);
+    defer testing.allocator.free(wire);
+    wire[0] = 1;
+    @memcpy(wire[1..], inner);
+    var decoded = try decodeP2PTcpMessage(
+        testing.allocator,
+        types.ConsensusNetMessage,
+        wire,
+    );
+    defer decoded.deinit();
+    var out = try formatToList(testing.allocator, types.ConsensusNetMessage, decoded.value);
+    defer out.deinit(testing.allocator);
+    // The fixture uses cph = "cp-1" (4 ASCII bytes); the hex is
+    // "63702d31".
+    try testing.expect(std.mem.indexOf(u8, out.items, "PrepareVote") != null);
+    try testing.expect(std.mem.indexOf(u8, out.items, "63702d31") != null);
+}
+
+test "formatMessage: Handshake::Hello prints canal/name" {
+    const frame = corpus.wire.messages.p2p_message_handshake_hello_inner;
+    var decoded = try decodeP2PTcpMessage(testing.allocator, []const u8, frame);
+    defer decoded.deinit();
+    var out = try formatToList(testing.allocator, []const u8, decoded.value);
+    defer out.deinit(testing.allocator);
+    try testing.expect(std.mem.indexOf(u8, out.items, "Handshake::Hello") != null);
+    try testing.expect(std.mem.indexOf(u8, out.items, "canal=p2p") != null);
+    try testing.expect(std.mem.indexOf(u8, out.items, "validator-a") != null);
+}
+
+test "formatMessage: Commit prints qc validators count and cph" {
+    const inner = corpus.borsh.consensus.net_message_commit;
+    const wire = try testing.allocator.alloc(u8, 1 + inner.len);
+    defer testing.allocator.free(wire);
+    wire[0] = 1;
+    @memcpy(wire[1..], inner);
+    var decoded = try decodeP2PTcpMessage(
+        testing.allocator,
+        types.ConsensusNetMessage,
+        wire,
+    );
+    defer decoded.deinit();
+    var out = try formatToList(testing.allocator, types.ConsensusNetMessage, decoded.value);
+    defer out.deinit(testing.allocator);
+    // The fixture's commit_qc has 2 validators.
+    try testing.expect(std.mem.indexOf(u8, out.items, "Commit") != null);
+    try testing.expect(std.mem.indexOf(u8, out.items, "qc_validators=2") != null);
 }
