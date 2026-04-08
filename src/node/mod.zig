@@ -9,7 +9,9 @@
 //! point.
 
 pub const follower = @import("follower.zig");
+pub const handshake = @import("handshake.zig");
 
 test {
     _ = follower;
+    _ = handshake;
 }
