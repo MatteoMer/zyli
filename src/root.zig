@@ -8,10 +8,12 @@ pub const model = @import("model/mod.zig");
 pub const crypto = @import("crypto/mod.zig");
 pub const wire = @import("wire/mod.zig");
 pub const node = @import("node/mod.zig");
+pub const storage = @import("storage/mod.zig");
 
 test {
     _ = model;
     _ = crypto;
     _ = wire;
     _ = node;
+    _ = storage;
 }
