@@ -8,12 +8,14 @@ handshake, the replay path, the full consensus message family
 the SignedBlock shape, a stream-driven frame reader, and a typed
 P2PTcpMessage decoder. The executable's `observe HOST:PORT` subcommand
 prints actual ConsensusNetMessage variant labels for Data frames.
-Phase 1 of the implementation plan is **in progress**: `zolt-arith`
-exists as a sibling package at `../zolt-arith` with `bigint`, a
-generic Montgomery field, and the BLS12-381 base field instantiation
-(`Fp`) all in place. Zyli depends on it via `build.zig.zon` and
-exposes a smoke test to keep the wiring honest.
-**172 tests passing in zyli, 34 in zolt-arith (206 total). 127 fixtures.**
+Phases 1 and 2 of the implementation plan are **in progress**:
+`zolt-arith` exists as a sibling package at `../zolt-arith` with
+`bigint`, a generic Montgomery field (with Fermat inversion), the
+BLS12-381 base field `Fp`, the quadratic extension `Fp2`, and G1
+affine short-Weierstrass arithmetic (add / double / neg / scalar
+mul). Zyli depends on it via `build.zig.zon` and exposes a smoke test
+to keep the wiring honest.
+**172 tests passing in zyli, 66 in zolt-arith (238 total). 127 fixtures.**
 
 - `build.zig` / `build.zig.zon` set up; library + executable build cleanly.
 - Borsh codec in `src/model/borsh.zig` covers primitives, options, slices,
@@ -113,21 +115,36 @@ exposes a smoke test to keep the wiring honest.
     (add, sub, cmp, isZero/isOne, bitLen, fromBytesLe/Be, toBytesLe/Be)
     for both 4-limb (BN254-width) and 6-limb (BLS12-381-width) operands.
   - `field.MontgomeryField(N, modulus, r2, n_prime)`: comptime-generic
-    finite field stored in Montgomery form, with add/sub/neg and CIOS
-    Montgomery multiplication. Tested over Curve25519's base field
-    (4 limbs, p = 2^255 - 19) so a hand-checkable instantiation
-    validates the algorithm before BLS12-381 is involved.
+    finite field stored in Montgomery form, with add/sub/neg, CIOS
+    Montgomery multiplication, square, square-and-multiply pow, and
+    Fermat inversion. Tested over Curve25519's base field (4 limbs,
+    p = 2^255 - 19) so a hand-checkable instantiation validates the
+    algorithm before BLS12-381 is involved.
   - `bls12_381.Fp`: BLS12-381 base field instantiation. Pins the
     standard `blst` constants (modulus, R^2, -p^-1) and exercises
     identity laws, distributive multiplication, associativity, near-
-    modulus round-trips, and the (p-1)^2 = 1 mod p identity.
+    modulus round-trips, the (p-1)^2 = 1 mod p identity, and the
+    6-limb Fermat inversion (~381 squarings + ~190 multiplies).
+  - `bls12_381.Fp2`: quadratic extension `Fp[u]/(u² + 1)`. Add, sub,
+    neg, mul (schoolbook), specialized square via `(a+b)(a-b) + 2ab·u`,
+    and norm-based inversion. Tested with the `u² = -1` invariant,
+    distributive multiplication, hand-computed values, and inversion
+    round-trips.
+  - `bls12_381.G1Affine`: short-Weierstrass curve `y² = x³ + 4` over
+    Fp. `identity`, `fromRaw`, `isOnCurve`, `eql`, `neg`, `double`,
+    `add`, and double-and-add `mul` parametric over scalar limb count.
+    The BLS12-381 G1 generator coordinates from RFC 9380 §8.8.1 are
+    pinned and validated. Tested with neutrality, P + (-P) = id, the
+    2P/3P/4P consistency checks, commutativity, associativity, and
+    scalar-multiplication identities. All operations cycle through
+    Fermat inversion so this is slow but correct.
   Zyli imports the package via path dependency in `build.zig.zon` and
   re-exports it through `src/crypto/zolt_arith.zig`.
   `src/crypto/zolt_arith_adapter.zig` is the seam where Hyli wire bytes
   (compressed BLS12-381 G1 / G2 byte strings) get converted into the
   limb representation `zolt_arith` consumes — kept in zyli so the
   substrate stays Hyli-agnostic. Each package owns its own test step:
-  `zig build test` in zyli runs 172 tests, in `../zolt-arith` runs 34,
+  `zig build test` in zyli runs 172 tests, in `../zolt-arith` runs 66,
   and the test runner does NOT propagate across module boundaries on
   Zig 0.15.
 - `src/crypto/signable.zig` pins the BLS DST string used by
@@ -139,13 +156,13 @@ exposes a smoke test to keep the wiring honest.
 
 ## Immediate
 
-- Add Fp inversion via Fermat's little theorem (`a^(p-2) mod p`) on top
-  of the existing `montMul`. Needed for projective→affine conversion
-  in G1/G2.
-- Add `Fp2` (quadratic extension over Fp) for BLS12-381 G2 coordinates.
-- Add G1 / G2 short Weierstrass curve arithmetic (affine + projective).
-- Add the optimal Ate pairing for BLS12-381.
-- Add hash-to-curve (RFC 9380, suite
+- Add G2 short-Weierstrass curve arithmetic over Fp2 (the curve
+  equation is `y² = x³ + 4(1+u)` for BLS12-381). Mirrors G1Affine
+  but with Fp2 coordinates.
+- Add G2 scalar multiplication.
+- Add the optimal Ate pairing for BLS12-381 (Miller loop + final
+  exponentiation).
+- Add hash-to-curve to G2 (RFC 9380, suite
   `BLS12381G2_XMD:SHA-256_SSWU_RO_`) so we can verify signatures.
 - Wire BLS verification into `src/crypto/zolt_arith_adapter.zig` and
   hook it into a verifier in `src/crypto/`.
