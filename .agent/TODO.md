@@ -44,16 +44,13 @@ Zyli (290 tests, 166 fixtures) has:
 ## Immediate
 
 - ✅ Persistent BLS identity (`--identity <path>` flag, `node/identity.zig`)
-- Wire the SignedBlock certificate verifier into the DA sync client so
-  every received block gets cryptographically validated before being
-  passed to the caller's callback.
+- ✅ SignedBlock certificate verification wired into DA sync reporting
+- ✅ Verack BLS signature verification after handshake
+- ✅ PING echo on consensus connection (observe/record)
 - Add structural validation to the DA sync client (block height
   monotonicity, parent hash chain continuity).
-- Add fixtures for the DA historical-stream `DataAvailabilityRequest` /
-  `DataAvailabilityReply` envelopes against real testnet captures.
 - Feed DA-synced blocks through the follower to advance chain state.
-- Verify the Verack BLS signature after handshake.
-- PING echo on the consensus connection.
+- Add fixtures for DA envelopes against real testnet captures.
 
 ## Phase 5 (in progress)
 
