@@ -9,22 +9,21 @@ the SignedBlock shape, a stream-driven frame reader, and a typed
 P2PTcpMessage decoder. The executable's `observe HOST:PORT` subcommand
 prints actual ConsensusNetMessage variant labels for Data frames.
 Phases 1 and 2 of the implementation plan are **well underway**:
-`zolt-arith` exists as a sibling package at `../zolt-arith` with
-`bigint`, a generic Montgomery field, the BLS12-381 base field `Fp`,
-the quadratic extension `Fp2` (both with sqrt), G1 and G2 affine
-short-Weierstrass arithmetic (add / double / neg / scalar mul), AND
-compressed point decoding for both G1 and G2 — the wire format
-Hyli puts validator pubkeys and signatures in. Both decoders are
-wired into Zyli's `crypto/zolt_arith_adapter.zig`.
+`zolt-arith` exists as a sibling package at `../zolt-arith` with the
+**full BLS12-381 field tower** in place: Fp (with sqrt), Fp2 (with
+sqrt), Fp6, and Fp12. Plus the BLS12-381 scalar field Fr. G1 and G2
+affine short-Weierstrass arithmetic (add / double / neg / scalar mul)
+and **compressed point decoding for both G1 and G2** — the wire
+format Hyli puts validator pubkeys and signatures in. Both decoders
+are wired into Zyli's `crypto/zolt_arith_adapter.zig`.
 
 Still missing for full BLS verification:
-- Fp6 / Fp12 tower extensions
-- Optimal Ate pairing (Miller loop + final exponentiation)
+- Optimal Ate pairing (Miller loop + final exponentiation in Fp12)
 - Hash-to-curve for G2 (RFC 9380 SSWU)
 - BLS verify entry point
 - Subgroup membership checks for hostile inputs
 
-**176 tests passing in zyli, 94 in zolt-arith (270 total). 127 fixtures.**
+**176 tests passing in zyli, 111 in zolt-arith (287 total). 127 fixtures.**
 
 - `build.zig` / `build.zig.zon` set up; library + executable build cleanly.
 - Borsh codec in `src/model/borsh.zig` covers primitives, options, slices,
@@ -139,6 +138,21 @@ Still missing for full BLS verification:
     and norm-based inversion. Tested with the `u² = -1` invariant,
     distributive multiplication, hand-computed values, and inversion
     round-trips.
+  - `bls12_381.Fr`: BLS12-381 scalar field instantiation (4 limbs, 255
+    bits). Validators sign with scalars from this field; the curve
+    point group order is exactly `r`. Tested with identity laws,
+    distributive multiplication, the (r-1)+1 = 0 wraparound, and the
+    4-limb Fermat inversion round-trip.
+  - `bls12_381.Fp6`: cubic extension `Fp2[v]/(v³ - (1+u))`. add, sub,
+    neg, mul (schoolbook, 9 Fp2 mults), square, mulByV, inv (via the
+    standard adjugate/norm formula). Tested with the v³ = 1+u tower
+    relation, distributive multiplication, associativity, mulByV
+    against manual mul, and inversion round-trips.
+  - `bls12_381.Fp12`: quadratic extension `Fp6[w]/(w² - v)` — the
+    target group of the BLS12-381 optimal Ate pairing. mul uses
+    Karatsuba (3 Fp6 mults), inv is norm-based (one Fp6 inversion).
+    Tested with the w² = v tower relation, distributive
+    multiplication, and inversion round-trips.
   - `bls12_381.G1Affine` / `bls12_381.G2Affine`: short-Weierstrass
     curves `y² = x³ + 4` (G1, over Fp) and `y² = x³ + 4(1+u)` (G2,
     over Fp2). `identity`, `fromRaw`, `isOnCurve`, `eql`, `neg`,
@@ -165,7 +179,7 @@ Still missing for full BLS verification:
   points. `validatorPublicKeyToG1` and `signatureToG2` complete the
   end-to-end "Hyli wire → BLS12-381 point" path; the substrate stays
   Hyli-agnostic. Each package owns its own test step: `zig build test`
-  in zyli runs 176 tests, in `../zolt-arith` runs 94, and the test
+  in zyli runs 176 tests, in `../zolt-arith` runs 111, and the test
   runner does NOT propagate across module boundaries on Zig 0.15.
 - `src/crypto/signable.zig` pins the BLS DST string used by
   `hyli-crypto::sign_msg` and exposes `signableBytesAlloc(Msg, msg)` —
@@ -176,11 +190,10 @@ Still missing for full BLS verification:
 
 ## Immediate
 
-- Add the Fp6 / Fp12 tower extensions on top of Fp2. Fp12 is what the
-  BLS12-381 optimal Ate pairing lives in.
-- Add the optimal Ate pairing for BLS12-381 (Miller loop + final
-  exponentiation). This is the largest single piece of work remaining
-  in Phase 2.
+- Add the optimal Ate pairing for BLS12-381 (Miller loop with line
+  function evaluation, then final exponentiation in Fp12). This is the
+  largest single piece of work remaining in Phase 2 — hundreds of
+  lines of careful code, but every primitive it needs is now in place.
 - Add hash-to-curve to G2 (RFC 9380, suite
   `BLS12381G2_XMD:SHA-256_SSWU_RO_`) so we can hash a message to the
   G2 group element that gets paired against the validator's public key.
