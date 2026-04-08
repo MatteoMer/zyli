@@ -146,6 +146,8 @@ fn observe(
     var frames = zyli.wire.framing.StreamFrameReader(*StreamReader).init(allocator);
     defer frames.deinit();
 
+    var follower = zyli.node.follower.Follower.init();
+
     var frame_count: usize = 0;
     while (true) {
         const maybe_frame = frames.nextFrame(&stream_reader) catch |err| {
@@ -163,7 +165,7 @@ fn observe(
         const kind = zyli.wire.tcp_message.classifyFrame(frame);
         switch (kind) {
             .ping => try stdout.print("frame {d}: PING ({d} bytes)\n", .{ frame_count, frame.len }),
-            .data => try printDataFrame(allocator, stdout, frame_count, frame),
+            .data => try printDataFrame(allocator, stdout, frame_count, frame, &follower),
         }
         try stdout.flush();
     }
@@ -294,6 +296,8 @@ fn replay(
     var frames = zyli.wire.framing.StreamFrameReader(*FileReader).init(allocator);
     defer frames.deinit();
 
+    var follower = zyli.node.follower.Follower.init();
+
     var frame_count: usize = 0;
     while (true) {
         const maybe_frame = frames.nextFrame(&file_reader) catch |err| {
@@ -311,7 +315,7 @@ fn replay(
         const kind = zyli.wire.tcp_message.classifyFrame(frame);
         switch (kind) {
             .ping => try stdout.print("frame {d}: PING ({d} bytes)\n", .{ frame_count, frame.len }),
-            .data => try printDataFrame(allocator, stdout, frame_count, frame),
+            .data => try printDataFrame(allocator, stdout, frame_count, frame, &follower),
         }
         try stdout.flush();
     }
@@ -319,14 +323,16 @@ fn replay(
 
 /// Decode a `P2PTcpMessage<ConsensusNetMessage>` from a Data frame and
 /// print a detailed one-line summary plus the structural validation
-/// verdict. We assume the canal is `"p2p"` for now — until the
-/// observer learns to track per-canal context, treating every Data
-/// frame as a consensus message is the right default.
+/// verdict and the follower-state event. We assume the canal is
+/// `"p2p"` for now — until the observer learns to track per-canal
+/// context, treating every Data frame as a consensus message is the
+/// right default.
 fn printDataFrame(
     allocator: std.mem.Allocator,
     stdout: anytype,
     frame_index: usize,
     frame: []const u8,
+    follower: *zyli.node.follower.Follower,
 ) !void {
     var decoded = zyli.wire.protocol.decodeP2PTcpMessage(
         allocator,
@@ -352,5 +358,45 @@ fn printDataFrame(
         decoded.value,
         stdout,
     );
-    try stdout.print(" [{s}]\n", .{verdict});
+    try stdout.print(" [{s}]", .{verdict});
+
+    // Fold the message through the follower and report what changed.
+    // Handshake-only frames don't reach here; this only runs on
+    // P2PTcpMessage::Data variants whose inner type is
+    // ConsensusNetMessage.
+    if (decoded.value == .data) {
+        const event = follower.handle(decoded.value.data);
+        try printFollowerEvent(stdout, event);
+    }
+    try stdout.print("\n", .{});
+}
+
+fn printFollowerEvent(stdout: anytype, event: zyli.node.follower.Event) !void {
+    switch (event) {
+        .accepted_prepare => |info| try stdout.print(
+            " {{follower: prepared slot={d}/view={d}}}",
+            .{ info.slot, info.view },
+        ),
+        .accepted_sync => |info| try stdout.print(
+            " {{follower: sync-fill slot={d}/view={d}}}",
+            .{ info.slot, info.view },
+        ),
+        .committed => |info| try stdout.print(
+            " {{follower: committed slot={d} validators={d}}}",
+            .{ info.slot, info.validators },
+        ),
+        .observed => |info| try stdout.print(" {{follower: observed {s}}}", .{@tagName(info.kind)}),
+        .observed_vote => |info| try stdout.print(
+            " {{follower: vote {s}}}",
+            .{@tagName(info.kind)},
+        ),
+        .observed_qc => |info| try stdout.print(
+            " {{follower: qc {s} validators={d}}}",
+            .{ @tagName(info.kind), info.validators },
+        ),
+        .rejected => |info| try stdout.print(
+            " {{follower: REJECTED {s}}}",
+            .{@tagName(info.reason)},
+        ),
+    }
 }
