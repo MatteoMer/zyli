@@ -46,6 +46,10 @@ fn printUsage(stdout: anytype) !void {
         \\    da-sync <host>:<port> [height] Sync signed blocks from a DA server.
         \\    help                           Show this help text.
         \\
+        \\OPTIONS:
+        \\    --identity <path>              Load or create a persistent BLS keypair at <path>.
+        \\                                   Without this, a fresh ephemeral key is used per run.
+        \\
         \\See docs/implementation-plan.md for the full roadmap.
         \\
     );
@@ -82,7 +86,7 @@ pub fn main() !void {
                 try stdout.writeAll("observe: missing <host>:<port> argument\n");
                 return;
             }
-            try observe(allocator, stdout, args[2]);
+            try observe(allocator, stdout, args[2], resolveIdentity(args));
         },
         .replay => {
             if (args.len < 3) {
@@ -96,7 +100,7 @@ pub fn main() !void {
                 try stdout.writeAll("record: missing <host>:<port> <file> arguments\n");
                 return;
             }
-            try record(allocator, stdout, args[2], args[3]);
+            try record(allocator, stdout, args[2], args[3], resolveIdentity(args));
         },
         .da_sync => {
             if (args.len < 3) {
@@ -115,20 +119,19 @@ pub fn main() !void {
     }
 }
 
-/// Generate an ephemeral BLS secret key from OS entropy. Returns a
-/// 4-limb little-endian scalar suitable for `buildHelloFrame`.
-fn generateEphemeralKey() [4]u64 {
-    var seed: [32]u8 = undefined;
-    std.crypto.random.bytes(&seed);
-    var limbs: [4]u64 = undefined;
-    inline for (0..4) |i| {
-        limbs[i] = std.mem.readInt(u64, seed[i * 8 ..][0..8], .little);
+/// Resolve the BLS secret key: if an `--identity <path>` flag was given,
+/// load or generate at that path; otherwise generate a fresh ephemeral key.
+fn resolveIdentity(args: []const []const u8) [4]u64 {
+    // Scan for --identity <path> anywhere in the argument list.
+    var i: usize = 0;
+    while (i < args.len) : (i += 1) {
+        if (std.mem.eql(u8, args[i], "--identity") and i + 1 < args.len) {
+            return zyli.node.identity.loadOrGenerate(args[i + 1]) catch {
+                return zyli.node.identity.generateEphemeralKey();
+            };
+        }
     }
-    // Ensure non-zero (astronomically unlikely but handle it).
-    if (limbs[0] == 0 and limbs[1] == 0 and limbs[2] == 0 and limbs[3] == 0) {
-        limbs[0] = 1;
-    }
-    return limbs;
+    return zyli.node.identity.generateEphemeralKey();
 }
 
 /// Connect to a Hyli peer at `addr_port` (e.g. `127.0.0.1:4242`),
@@ -139,6 +142,7 @@ fn observe(
     allocator: std.mem.Allocator,
     stdout: anytype,
     addr_port: []const u8,
+    sk: [4]u64,
 ) !void {
     const sep = std.mem.lastIndexOfScalar(u8, addr_port, ':') orelse {
         try stdout.print("observe: address must be host:port, got `{s}`\n", .{addr_port});
@@ -165,10 +169,8 @@ fn observe(
     defer stream.close();
 
     // --- BLS handshake ---
-    // Generate an ephemeral keypair and send a signed Hello to the peer.
-    // The Hyli peer will reject the connection unless it receives a valid
-    // handshake before any data frames.
-    const sk = generateEphemeralKey();
+    // Send a signed Hello to the peer. The key is either ephemeral or
+    // loaded from --identity <path>.
     const now_ms: u128 = @intCast(std.time.milliTimestamp());
     var hello_bundle = zyli.node.handshake.buildHelloFrame(
         allocator,
@@ -299,6 +301,7 @@ fn record(
     stdout: anytype,
     addr_port: []const u8,
     out_path: []const u8,
+    sk: [4]u64,
 ) !void {
     const sep = std.mem.lastIndexOfScalar(u8, addr_port, ':') orelse {
         try stdout.print("record: address must be host:port, got `{s}`\n", .{addr_port});
@@ -334,7 +337,6 @@ fn record(
     defer stream.close();
 
     // --- BLS handshake (same as observe) ---
-    const sk = generateEphemeralKey();
     const now_ms: u128 = @intCast(std.time.milliTimestamp());
     var hello_bundle = zyli.node.handshake.buildHelloFrame(
         allocator,
