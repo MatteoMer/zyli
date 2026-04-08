@@ -57,6 +57,7 @@ Source: `hyli` git revision `e41899eb582d2d25d13a97a425ec76250484d45c`.
 | `borsh/model/consensus_staking_action_bond.bin` | `hyli_model::ConsensusStakingAction` | 39 | ConsensusStakingAction::Bond { candidate=SignedByValidator<ValidatorCandidacy> } |
 | `borsh/model/consensus_staking_action_pay.bin` | `hyli_model::ConsensusStakingAction` | 24 | ConsensusStakingAction::PayFeesForDaDi { lane=default, cumul=4096 } |
 | `borsh/model/contract_name_hyli.bin` | `hyli_model::ContractName` | 8 | ContractName("hyli") |
+| `borsh/model/contract_sample.bin` | `hyli_model::Contract` | 61 | Contract { name=counter, verifier=risc0, ... } |
 | `borsh/model/da_event_not_found.bin` | `hyli_model::DataAvailabilityEvent` | 9 | DataAvailabilityEvent::BlockNotFound(99) |
 | `borsh/model/da_event_signed_block.bin` | `hyli_model::DataAvailabilityEvent` | 213 | DataAvailabilityEvent::SignedBlock(signed_block_sample) |
 | `borsh/model/da_event_status.bin` | `hyli_model::DataAvailabilityEvent` | 45 | DataAvailabilityEvent::MempoolStatusEvent(...) |
@@ -86,6 +87,9 @@ Source: `hyli` git revision `e41899eb582d2d25d13a97a425ec76250484d45c`.
 | `borsh/model/signed_block_sample.bin` | `hyli_model::SignedBlock` | 212 | SignedBlock with one lane, one empty DataProposal, cp_full, 2-validator aggregate |
 | `borsh/model/signed_node_connection_data.bin` | `Signed<NodeConnectionData, ValidatorSignature>` | 97 | SignedByValidator<NodeConnectionData> |
 | `borsh/model/signed_validator_candidacy.bin` | `hyli_model::Signed<ValidatorCandidacy, ValidatorSignature>` | 38 | SignedByValidator<ValidatorCandidacy> |
+| `borsh/model/staking_action_delegate.bin` | `hyli_model::StakingAction` | 9 | StakingAction::Delegate { validator = [0x01;4] } |
+| `borsh/model/staking_action_deposit_for_fees.bin` | `hyli_model::StakingAction` | 25 | StakingAction::DepositForFees { holder = [0x02;4], amount = 50 } |
+| `borsh/model/staking_action_stake.bin` | `hyli_model::StakingAction` | 17 | StakingAction::Stake { amount = 100 } |
 | `borsh/model/state_commitment_4_bytes.bin` | `hyli_model::StateCommitment` | 8 | StateCommitment([0,1,2,3]) |
 | `borsh/model/timeout_window_default.bin` | `hyli_model::TimeoutWindow` | 17 | TimeoutWindow::Timeout { hard=100, soft=100 } |
 | `borsh/model/timeout_window_no_timeout.bin` | `hyli_model::TimeoutWindow` | 1 | TimeoutWindow::NoTimeout |
@@ -97,6 +101,13 @@ Source: `hyli` git revision `e41899eb582d2d25d13a97a425ec76250484d45c`.
 | `borsh/model/transaction_kind_verified_proof.bin` | `hyli_model::TransactionKind` | 1 | TransactionKind::VerifiedProof (single byte 2) |
 | `borsh/model/transaction_metadata_blob.bin` | `hyli_model::TransactionMetadata` | 21 | TransactionMetadata { version=1, kind=Blob, id=(dp-1, tx-1) } |
 | `borsh/model/transaction_proof.bin` | `hyli_model::Transaction` | 51 | Transaction { version=1, data=Proof(...) } |
+| `borsh/model/transaction_state_event_dropped.bin` | `hyli_model::TransactionStateEvent` | 1 | TransactionStateEvent::DroppedAsDuplicate |
+| `borsh/model/transaction_state_event_error.bin` | `hyli_model::TransactionStateEvent` | 22 | TransactionStateEvent::Error("validation failed") |
+| `borsh/model/transaction_state_event_new_proof.bin` | `hyli_model::TransactionStateEvent` | 23 | TransactionStateEvent::NewProof { blob_index=0, proof_tx_hash=[0x77;4], output=[0xab,0xcd] } |
+| `borsh/model/transaction_state_event_sequenced.bin` | `hyli_model::TransactionStateEvent` | 1 | TransactionStateEvent::Sequenced |
+| `borsh/model/transaction_state_event_settled.bin` | `hyli_model::TransactionStateEvent` | 1 | TransactionStateEvent::Settled |
+| `borsh/model/transaction_state_event_settled_as_failed.bin` | `hyli_model::TransactionStateEvent` | 1 | TransactionStateEvent::SettledAsFailed |
+| `borsh/model/transaction_state_event_timed_out.bin` | `hyli_model::TransactionStateEvent` | 1 | TransactionStateEvent::TimedOut |
 | `borsh/model/tx_context.bin` | `hyli_model::TxContext` | 63 | TxContext { lane=default, block=[0x55;4], height=123, ts=456, chain_id=7 } |
 | `borsh/model/tx_id_sample.bin` | `hyli_model::TxId` | 16 | TxId(dp_hash="dp-1", tx_hash="tx-1") |
 | `borsh/model/validator_candidacy.bin` | `hyli_model::ValidatorCandidacy` | 18 | ValidatorCandidacy { peer_address="127.0.0.1:4242" } |

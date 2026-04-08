@@ -19,13 +19,14 @@ use borsh::BorshSerialize;
 use hyli_model::{
     utils::TimestampMs, AggregateSignature, Blob, BlobData, BlobHash, BlobIndex,
     BlobProofOutput, BlobTransaction, BlobsHashes, BlockHeight, Calldata, ConsensusProposal,
-    ConsensusProposalHash, ConsensusStakingAction, ContractName, DataAvailabilityEvent,
+    ConsensusProposalHash, ConsensusStakingAction, Contract, ContractName, DataAvailabilityEvent,
     DataAvailabilityRequest, DataProposal, DataProposalHash, DataProposalParent, Hashed,
     HyliOutput, Identity, IndexedBlobs, LaneBytesSize, LaneId, MempoolStatusEvent, OnchainEffect,
     ProgramId, ProofData, ProofDataHash, ProofTransaction, RegisterContractAction,
-    RegisterContractEffect, Signature, Signed, SignedBlock, StateCommitment, TimeoutWindow,
-    Transaction, TransactionData, TransactionKind, TransactionMetadata, TxContext, TxHash, TxId,
-    ValidatorCandidacy, ValidatorPublicKey, ValidatorSignature, Verifier, VerifiedProofTransaction,
+    RegisterContractEffect, Signature, Signed, SignedBlock, StakingAction, StateCommitment,
+    TimeoutWindow, Transaction, TransactionData, TransactionKind, TransactionMetadata,
+    TransactionStateEvent, TxContext, TxHash, TxId, ValidatorCandidacy, ValidatorPublicKey,
+    ValidatorSignature, Verifier, VerifiedProofTransaction,
 };
 use sha3::Digest as _;
 
@@ -2186,6 +2187,113 @@ fn main() {
         "hyli_model::DataAvailabilityEvent",
         "DataAvailabilityEvent::BlockNotFound(99)",
         &da_event_not_found,
+    );
+
+    // ---- StakingAction (3/4 variants — Distribute needs RewardsClaim
+    // ---- which has no public constructor and is exclusively built by
+    // ---- the staking contract internally).
+    let staking_stake = StakingAction::Stake { amount: 100 };
+    gen.write_borsh(
+        "model/staking_action_stake",
+        "hyli_model::StakingAction",
+        "StakingAction::Stake { amount = 100 }",
+        &staking_stake,
+    );
+
+    let staking_delegate = StakingAction::Delegate {
+        validator: ValidatorPublicKey(vec![0x01; 4]),
+    };
+    gen.write_borsh(
+        "model/staking_action_delegate",
+        "hyli_model::StakingAction",
+        "StakingAction::Delegate { validator = [0x01;4] }",
+        &staking_delegate,
+    );
+
+    let staking_deposit = StakingAction::DepositForFees {
+        holder: ValidatorPublicKey(vec![0x02; 4]),
+        amount: 50,
+    };
+    gen.write_borsh(
+        "model/staking_action_deposit_for_fees",
+        "hyli_model::StakingAction",
+        "StakingAction::DepositForFees { holder = [0x02;4], amount = 50 }",
+        &staking_deposit,
+    );
+
+    // ---- Contract: the registered contract record stored by replay.
+    let contract_sample = Contract {
+        name: ContractName("counter".to_string()),
+        program_id: ProgramId(vec![0xaa; 8]),
+        state: StateCommitment(vec![0xbb; 8]),
+        verifier: Verifier("risc0".to_string()),
+        timeout_window: TimeoutWindow::Timeout {
+            hard_timeout: BlockHeight(50),
+            soft_timeout: BlockHeight(100),
+        },
+    };
+    gen.write_borsh(
+        "model/contract_sample",
+        "hyli_model::Contract",
+        "Contract { name=counter, verifier=risc0, ... }",
+        &contract_sample,
+    );
+
+    // ---- TransactionStateEvent: lifecycle events emitted per
+    // ---- transaction. Pin the simple variants — the indexer side
+    // ---- groups them by tx_hash to render a status timeline.
+    let tse_sequenced = TransactionStateEvent::Sequenced;
+    gen.write_borsh(
+        "model/transaction_state_event_sequenced",
+        "hyli_model::TransactionStateEvent",
+        "TransactionStateEvent::Sequenced",
+        &tse_sequenced,
+    );
+    let tse_settled = TransactionStateEvent::Settled;
+    gen.write_borsh(
+        "model/transaction_state_event_settled",
+        "hyli_model::TransactionStateEvent",
+        "TransactionStateEvent::Settled",
+        &tse_settled,
+    );
+    let tse_failed = TransactionStateEvent::SettledAsFailed;
+    gen.write_borsh(
+        "model/transaction_state_event_settled_as_failed",
+        "hyli_model::TransactionStateEvent",
+        "TransactionStateEvent::SettledAsFailed",
+        &tse_failed,
+    );
+    let tse_timed_out = TransactionStateEvent::TimedOut;
+    gen.write_borsh(
+        "model/transaction_state_event_timed_out",
+        "hyli_model::TransactionStateEvent",
+        "TransactionStateEvent::TimedOut",
+        &tse_timed_out,
+    );
+    let tse_dropped = TransactionStateEvent::DroppedAsDuplicate;
+    gen.write_borsh(
+        "model/transaction_state_event_dropped",
+        "hyli_model::TransactionStateEvent",
+        "TransactionStateEvent::DroppedAsDuplicate",
+        &tse_dropped,
+    );
+    let tse_error = TransactionStateEvent::Error("validation failed".to_string());
+    gen.write_borsh(
+        "model/transaction_state_event_error",
+        "hyli_model::TransactionStateEvent",
+        "TransactionStateEvent::Error(\"validation failed\")",
+        &tse_error,
+    );
+    let tse_new_proof = TransactionStateEvent::NewProof {
+        blob_index: BlobIndex(0),
+        proof_tx_hash: TxHash(vec![0x77; 4]),
+        program_output: vec![0xab, 0xcd],
+    };
+    gen.write_borsh(
+        "model/transaction_state_event_new_proof",
+        "hyli_model::TransactionStateEvent",
+        "TransactionStateEvent::NewProof { blob_index=0, proof_tx_hash=[0x77;4], output=[0xab,0xcd] }",
+        &tse_new_proof,
     );
 
     // ---- Crypto: BLS signable payload reference ---------------------------

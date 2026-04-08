@@ -1544,6 +1544,136 @@ test "fixture: DataAvailabilityEvent::BlockNotFound(99)" {
     );
 }
 
+// ---------------------------------------------------------------------------
+// StakingAction
+// ---------------------------------------------------------------------------
+
+test "fixture: StakingAction::Stake { amount = 100 }" {
+    const value: types.StakingAction = .{ .stake = 100 };
+    try expectMatchesFixture(
+        types.StakingAction,
+        value,
+        corpus.borsh.model.staking_action_stake,
+    );
+}
+
+test "fixture: StakingAction::Delegate { validator = [0x01;4] }" {
+    const value: types.StakingAction = .{
+        .delegate = .{ .bytes = &[_]u8{0x01} ** 4 },
+    };
+    try expectMatchesFixture(
+        types.StakingAction,
+        value,
+        corpus.borsh.model.staking_action_delegate,
+    );
+}
+
+test "fixture: StakingAction::DepositForFees" {
+    const value: types.StakingAction = .{
+        .deposit_for_fees = .{
+            .holder = .{ .bytes = &[_]u8{0x02} ** 4 },
+            .amount = 50,
+        },
+    };
+    try expectMatchesFixture(
+        types.StakingAction,
+        value,
+        corpus.borsh.model.staking_action_deposit_for_fees,
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Contract
+// ---------------------------------------------------------------------------
+
+test "fixture: Contract sample" {
+    const value: types.Contract = .{
+        .name = .{ .value = "counter" },
+        .program_id = .{ .bytes = &[_]u8{0xaa} ** 8 },
+        .state = .{ .bytes = &[_]u8{0xbb} ** 8 },
+        .verifier = .{ .value = "risc0" },
+        .timeout_window = .{ .timeout = .{
+            .hard_timeout = .{ .height = 50 },
+            .soft_timeout = .{ .height = 100 },
+        } },
+    };
+    try expectMatchesFixture(types.Contract, value, corpus.borsh.model.contract_sample);
+}
+
+// ---------------------------------------------------------------------------
+// TransactionStateEvent — the per-transaction lifecycle the indexer
+// renders. Each variant gets its own pin.
+// ---------------------------------------------------------------------------
+
+test "fixture: TransactionStateEvent::Sequenced" {
+    const value: types.TransactionStateEvent = .sequenced;
+    try expectMatchesFixture(
+        types.TransactionStateEvent,
+        value,
+        corpus.borsh.model.transaction_state_event_sequenced,
+    );
+}
+
+test "fixture: TransactionStateEvent::Settled" {
+    const value: types.TransactionStateEvent = .settled;
+    try expectMatchesFixture(
+        types.TransactionStateEvent,
+        value,
+        corpus.borsh.model.transaction_state_event_settled,
+    );
+}
+
+test "fixture: TransactionStateEvent::SettledAsFailed" {
+    const value: types.TransactionStateEvent = .settled_as_failed;
+    try expectMatchesFixture(
+        types.TransactionStateEvent,
+        value,
+        corpus.borsh.model.transaction_state_event_settled_as_failed,
+    );
+}
+
+test "fixture: TransactionStateEvent::TimedOut" {
+    const value: types.TransactionStateEvent = .timed_out;
+    try expectMatchesFixture(
+        types.TransactionStateEvent,
+        value,
+        corpus.borsh.model.transaction_state_event_timed_out,
+    );
+}
+
+test "fixture: TransactionStateEvent::DroppedAsDuplicate" {
+    const value: types.TransactionStateEvent = .dropped_as_duplicate;
+    try expectMatchesFixture(
+        types.TransactionStateEvent,
+        value,
+        corpus.borsh.model.transaction_state_event_dropped,
+    );
+}
+
+test "fixture: TransactionStateEvent::Error(\"validation failed\")" {
+    const value: types.TransactionStateEvent = .{ .@"error" = "validation failed" };
+    try expectMatchesFixture(
+        types.TransactionStateEvent,
+        value,
+        corpus.borsh.model.transaction_state_event_error,
+    );
+}
+
+test "fixture: TransactionStateEvent::NewProof" {
+    const value: types.TransactionStateEvent = .{
+        .new_proof = .{
+            .blob_index = .{ .index = 0 },
+            .proof_tx_hash = .{ .bytes = &[_]u8{0x77} ** 4 },
+            .program_output = &[_]u8{ 0xab, 0xcd },
+        },
+    };
+    try expectMatchesFixture(
+        types.TransactionStateEvent,
+        value,
+        corpus.borsh.model.transaction_state_event_new_proof,
+    );
+}
+
 test "fixture: MempoolNetMessage::SyncReply" {
     const dags = &[_]types.ValidatorDag{sampleValidatorDag()};
     const value: types.MempoolNetMessage = .{

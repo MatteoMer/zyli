@@ -741,6 +741,64 @@ pub const DataAvailabilityEvent = union(enum) {
     block_not_found: BlockHeight,
 };
 
+// ---------------------------------------------------------------------------
+// Staking and indexer-side types
+// ---------------------------------------------------------------------------
+
+/// Inner payload of `StakingAction::DepositForFees { holder, amount }`.
+/// Borsh encodes a struct-like enum variant the same as a positional
+/// struct.
+pub const StakingDepositForFees = struct {
+    holder: ValidatorPublicKey,
+    amount: u128,
+};
+
+/// `hyli_model::staking::RewardsClaim`. Holds a list of block heights.
+/// `BlockHeight` is `pub BlockHeight(pub u64)`, so the wire form is
+/// just a length-prefixed `Vec<u64>`.
+pub const RewardsClaim = struct {
+    block_heights: []const BlockHeight,
+};
+
+/// `hyli_model::StakingAction`. Variant order matches staking.rs:
+/// Stake, Delegate, Distribute, DepositForFees.
+pub const StakingAction = union(enum) {
+    stake: u128,
+    delegate: ValidatorPublicKey,
+    distribute: RewardsClaim,
+    deposit_for_fees: StakingDepositForFees,
+};
+
+/// `hyli_model::Contract`. The on-disk record for a registered
+/// contract. Field order matches data_availability.rs.
+pub const Contract = struct {
+    name: ContractName,
+    program_id: ProgramId,
+    state: StateCommitment,
+    verifier: Verifier,
+    timeout_window: TimeoutWindow,
+};
+
+/// Inner payload of `TransactionStateEvent::NewProof`.
+pub const TransactionStateEventNewProof = struct {
+    blob_index: BlobIndex,
+    proof_tx_hash: TxHash,
+    program_output: []const u8,
+};
+
+/// `hyli_model::TransactionStateEvent`. Per-transaction lifecycle
+/// events the indexer subscribes to. Variant order matches
+/// data_availability.rs.
+pub const TransactionStateEvent = union(enum) {
+    sequenced: void,
+    @"error": []const u8,
+    new_proof: TransactionStateEventNewProof,
+    settled: void,
+    settled_as_failed: void,
+    timed_out: void,
+    dropped_as_duplicate: void,
+};
+
 test "type sizes are platform-stable where it matters" {
     // BlockHeight is u64, not usize.
     try std.testing.expectEqual(@as(usize, 8), @sizeOf(u64));
