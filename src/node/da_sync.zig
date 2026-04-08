@@ -23,6 +23,8 @@ const framing_mod = @import("../wire/framing.zig");
 const da_wire = @import("../wire/da.zig");
 const tcp_message = @import("../wire/tcp_message.zig");
 const consensus_verify = @import("../crypto/consensus_verify.zig");
+const hash_mod = @import("../model/hash.zig");
+const follower_mod = @import("follower.zig");
 
 /// What the caller gets back for each successfully-decoded event.
 pub const SyncEvent = union(enum) {
@@ -57,6 +59,64 @@ pub const SyncResult = struct {
         /// A decode error occurred.
         decode_error,
     };
+};
+
+/// Structural chain validator for DA-streamed blocks.
+///
+/// Tracks height monotonicity (block slots must strictly increase) and
+/// parent-hash chain continuity (each block's `parent_hash` must equal
+/// the hash of the previous block's proposal). These are local checks
+/// that require no BLS — they only confirm the server is sending a
+/// consistent, ordered chain.
+pub const ChainValidator = struct {
+    /// Slot of the last accepted block. 0 means no block yet.
+    last_slot: types.Slot = 0,
+    /// Hash of the last accepted block's consensus proposal. null until
+    /// the first block is processed.
+    last_hash: ?[32]u8 = null,
+    /// Number of blocks that passed validation.
+    accepted: usize = 0,
+    /// Number of blocks that failed height monotonicity.
+    height_violations: usize = 0,
+    /// Number of blocks that failed parent hash continuity.
+    parent_hash_violations: usize = 0,
+
+    pub const ValidationResult = enum {
+        ok,
+        height_not_monotonic,
+        parent_hash_mismatch,
+    };
+
+    /// Validate a signed block against the chain state. Returns `.ok`
+    /// if the block is consistent, or a violation kind otherwise.
+    pub fn validate(self: *ChainValidator, block: types.SignedBlock) ValidationResult {
+        const proposal = block.consensus_proposal;
+
+        // Height monotonicity: slot must be strictly greater.
+        if (proposal.slot <= self.last_slot) {
+            self.height_violations += 1;
+            return .height_not_monotonic;
+        }
+
+        // Parent hash continuity: if we have a previous hash, the
+        // block's parent_hash must match it. Skip for the first block
+        // (we don't know its parent).
+        if (self.last_hash) |prev_hash| {
+            if (proposal.parent_hash.bytes.len != 32 or
+                !std.mem.eql(u8, proposal.parent_hash.bytes, &prev_hash))
+            {
+                self.parent_hash_violations += 1;
+                return .parent_hash_mismatch;
+            }
+        }
+
+        // Accept: compute this block's hash and advance state.
+        const digest = hash_mod.consensusProposalHashed(&proposal);
+        self.last_hash = digest;
+        self.last_slot = proposal.slot;
+        self.accepted += 1;
+        return .ok;
+    }
 };
 
 /// Callback signature for block processing. Return `true` to continue
@@ -223,6 +283,8 @@ pub fn syncAndReport(
     var blocks: usize = 0;
     var verified: usize = 0;
     var not_found: usize = 0;
+    var chain = ChainValidator{};
+    var follower = follower_mod.Follower.init();
 
     while (true) {
         const maybe_frame = frames.nextFrame(&stream_reader) catch {
@@ -256,16 +318,33 @@ pub fn syncAndReport(
                 const n_lanes = block.data_proposals.len;
                 const n_validators = block.certificate.validators.len;
 
+                // Structural chain validation.
+                const chain_result = chain.validate(block);
+                const chain_label: []const u8 = switch (chain_result) {
+                    .ok => "ok",
+                    .height_not_monotonic => "HEIGHT",
+                    .parent_hash_mismatch => "PARENT",
+                };
+
+                // Feed through follower state machine.
+                const f_event = follower.handleSignedBlock(block);
+                const f_label: []const u8 = switch (f_event) {
+                    .committed => "committed",
+                    .observed => "stale",
+                    .rejected => "rejected",
+                    else => "other",
+                };
+
                 // Verify the block's CommitQC certificate.
                 const bls_ok = consensus_verify.verifySignedBlockCertificate(
                     allocator,
                     block,
                 ) catch false;
                 if (bls_ok) verified += 1;
-                const label: []const u8 = if (bls_ok) "ok" else "BAD";
+                const bls_label: []const u8 = if (bls_ok) "ok" else "BAD";
 
-                try stdout.print("block {d}: slot={d} lanes={d} validators={d} [bls={s}]\n", .{
-                    blocks, slot, n_lanes, n_validators, label,
+                try stdout.print("block {d}: slot={d} lanes={d} validators={d} [chain={s} bls={s} follower={s}]\n", .{
+                    blocks, slot, n_lanes, n_validators, chain_label, bls_label, f_label,
                 });
                 try stdout.flush();
             },
@@ -277,8 +356,8 @@ pub fn syncAndReport(
         }
     }
 
-    try stdout.print("da-sync: done — {d} blocks ({d} verified), {d} not-found\n", .{
-        blocks, verified, not_found,
+    try stdout.print("da-sync: done — {d} blocks ({d} verified, {d} chain-ok), {d} not-found, follower at slot {d}\n", .{
+        blocks, verified, chain.accepted, not_found, follower.slot,
     });
 }
 
@@ -296,4 +375,131 @@ test "SyncResult default state" {
         .termination = .server_closed,
     };
     try testing.expectEqual(SyncResult.Termination.server_closed, r.termination);
+}
+
+// ---------------------------------------------------------------------------
+// ChainValidator tests
+// ---------------------------------------------------------------------------
+
+fn testProposalAt(slot: types.Slot, ts: u128, parent_hash: []const u8) types.ConsensusProposal {
+    return .{
+        .slot = slot,
+        .parent_hash = .{ .bytes = parent_hash },
+        .cut = &[_]types.CutEntry{},
+        .staking_actions = &[_]types.ConsensusStakingAction{},
+        .timestamp = .{ .millis = ts },
+    };
+}
+
+fn testBlock(slot: types.Slot, ts: u128, parent_hash: []const u8) types.SignedBlock {
+    return .{
+        .data_proposals = &[_]types.LaneDataProposals{},
+        .consensus_proposal = testProposalAt(slot, ts, parent_hash),
+        .certificate = .{
+            .signature = .{ .bytes = &[_]u8{0xee} ** 12 },
+            .validators = &[_]types.ValidatorPublicKey{
+                .{ .bytes = &[_]u8{0x01} ** 4 },
+            },
+        },
+    };
+}
+
+test "ChainValidator: first block always accepted" {
+    var cv = ChainValidator{};
+    const block = testBlock(1, 100, "genesis");
+    const result = cv.validate(block);
+    try testing.expectEqual(ChainValidator.ValidationResult.ok, result);
+    try testing.expectEqual(@as(usize, 1), cv.accepted);
+    try testing.expectEqual(@as(types.Slot, 1), cv.last_slot);
+    try testing.expect(cv.last_hash != null);
+}
+
+test "ChainValidator: monotonic slots accepted" {
+    var cv = ChainValidator{};
+
+    // Block 1 — genesis parent (any hash is fine for the first block).
+    const b1 = testBlock(1, 100, "genesis");
+    try testing.expectEqual(ChainValidator.ValidationResult.ok, cv.validate(b1));
+
+    // Block 2 — parent hash must be hash of b1's proposal.
+    const b1_hash = hash_mod.consensusProposalHashed(&b1.consensus_proposal);
+    const b2 = testBlock(2, 200, &b1_hash);
+    try testing.expectEqual(ChainValidator.ValidationResult.ok, cv.validate(b2));
+
+    try testing.expectEqual(@as(usize, 2), cv.accepted);
+    try testing.expectEqual(@as(types.Slot, 2), cv.last_slot);
+}
+
+test "ChainValidator: duplicate slot rejected" {
+    var cv = ChainValidator{};
+    const b1 = testBlock(1, 100, "genesis");
+    _ = cv.validate(b1);
+
+    // Same slot again — height not monotonic.
+    const b1_dup = testBlock(1, 100, "genesis");
+    const result = cv.validate(b1_dup);
+    try testing.expectEqual(ChainValidator.ValidationResult.height_not_monotonic, result);
+    try testing.expectEqual(@as(usize, 1), cv.height_violations);
+    try testing.expectEqual(@as(usize, 1), cv.accepted); // unchanged
+}
+
+test "ChainValidator: older slot rejected" {
+    var cv = ChainValidator{};
+    _ = cv.validate(testBlock(5, 100, "genesis"));
+    const result = cv.validate(testBlock(3, 50, "whatever"));
+    try testing.expectEqual(ChainValidator.ValidationResult.height_not_monotonic, result);
+    try testing.expectEqual(@as(usize, 1), cv.height_violations);
+}
+
+test "ChainValidator: parent hash mismatch rejected" {
+    var cv = ChainValidator{};
+    const b1 = testBlock(1, 100, "genesis");
+    _ = cv.validate(b1);
+
+    // Block 2 with a WRONG parent hash.
+    const b2_bad = testBlock(2, 200, &[_]u8{0xff} ** 32);
+    const result = cv.validate(b2_bad);
+    try testing.expectEqual(ChainValidator.ValidationResult.parent_hash_mismatch, result);
+    try testing.expectEqual(@as(usize, 1), cv.parent_hash_violations);
+    // Still at block 1 — the bad block was not accepted.
+    try testing.expectEqual(@as(usize, 1), cv.accepted);
+    try testing.expectEqual(@as(types.Slot, 1), cv.last_slot);
+}
+
+test "ChainValidator: three-block chain with correct hashes" {
+    var cv = ChainValidator{};
+
+    const b1 = testBlock(1, 100, "genesis");
+    try testing.expectEqual(ChainValidator.ValidationResult.ok, cv.validate(b1));
+
+    const h1 = hash_mod.consensusProposalHashed(&b1.consensus_proposal);
+    const b2 = testBlock(2, 200, &h1);
+    try testing.expectEqual(ChainValidator.ValidationResult.ok, cv.validate(b2));
+
+    const h2 = hash_mod.consensusProposalHashed(&b2.consensus_proposal);
+    const b3 = testBlock(3, 300, &h2);
+    try testing.expectEqual(ChainValidator.ValidationResult.ok, cv.validate(b3));
+
+    try testing.expectEqual(@as(usize, 3), cv.accepted);
+    try testing.expectEqual(@as(types.Slot, 3), cv.last_slot);
+    try testing.expectEqual(@as(usize, 0), cv.height_violations);
+    try testing.expectEqual(@as(usize, 0), cv.parent_hash_violations);
+}
+
+test "ChainValidator: chain break after valid prefix" {
+    var cv = ChainValidator{};
+
+    const b1 = testBlock(1, 100, "genesis");
+    _ = cv.validate(b1);
+
+    const h1 = hash_mod.consensusProposalHashed(&b1.consensus_proposal);
+    const b2 = testBlock(2, 200, &h1);
+    _ = cv.validate(b2);
+
+    // Block 3 with wrong parent (should be hash of b2, not b1).
+    const b3_bad = testBlock(3, 300, &h1); // re-using b1's hash as parent
+    const result = cv.validate(b3_bad);
+    try testing.expectEqual(ChainValidator.ValidationResult.parent_hash_mismatch, result);
+    try testing.expectEqual(@as(usize, 2), cv.accepted);
+    try testing.expectEqual(@as(usize, 1), cv.parent_hash_violations);
 }
