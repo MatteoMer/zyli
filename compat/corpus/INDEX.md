@@ -129,11 +129,19 @@ Source: `hyli` git revision `e41899eb582d2d25d13a97a425ec76250484d45c`.
 | `borsh/primitives/u8_42.bin` | `u8` | 1 | single byte 42 |
 | `borsh/primitives/vec_u32_two.bin` | `Vec<u32>` | 12 | [1, 2] |
 | `borsh/primitives/vec_u8_three.bin` | `Vec<u8>` | 7 | [1, 2, 3] |
+| `crypto/bls/cross_impl_agg_msg.bin` | `&[u8]` | 46 | Message bytes signed by three validators in the cross-impl aggregate test |
+| `crypto/bls/cross_impl_agg_pubkey_1.bin` | `blst::min_pk::PublicKey (compressed)` | 48 | First validator pubkey in the cross-impl aggregate test |
+| `crypto/bls/cross_impl_agg_pubkey_2.bin` | `blst::min_pk::PublicKey (compressed)` | 48 | Second validator pubkey in the cross-impl aggregate test |
+| `crypto/bls/cross_impl_agg_pubkey_3.bin` | `blst::min_pk::PublicKey (compressed)` | 48 | Third validator pubkey in the cross-impl aggregate test |
+| `crypto/bls/cross_impl_agg_signature.bin` | `blst::min_pk::Signature (compressed)` | 96 | Aggregate signature over agg_msg from three signers |
 | `crypto/bls/cross_impl_msg.bin` | `&[u8]` | 30 | Message bytes signed by the cross-impl test pubkey |
 | `crypto/bls/cross_impl_msg_alt.bin` | `&[u8]` | 48 | Alternate message used to test signature/message mismatch rejection |
+| `crypto/bls/cross_impl_msg_long.bin` | `&[u8]` | 256 | 256-byte message exercising expand_message_xmd b_i chain |
 | `crypto/bls/cross_impl_pubkey.bin` | `blst::min_pk::PublicKey (compressed)` | 48 | BLS12-381 G1 pubkey from deterministic blst SecretKey for cross-impl tests |
 | `crypto/bls/cross_impl_signature.bin` | `blst::min_pk::Signature (compressed)` | 96 | BLS12-381 G2 signature on the cross-impl message under cross_impl_pubkey |
 | `crypto/bls/cross_impl_signature_alt.bin` | `blst::min_pk::Signature (compressed)` | 96 | Signature over the alternate message — verifies against msg_alt only |
+| `crypto/bls/cross_impl_signature_empty_msg.bin` | `blst::min_pk::Signature (compressed)` | 96 | Signature over the empty message — exercises hash-to-curve edge case |
+| `crypto/bls/cross_impl_signature_long_msg.bin` | `blst::min_pk::Signature (compressed)` | 96 | Signature over the 256-byte message |
 | `hash/model/blob_proof_output_sample.bin` | `hyli_model::BlobProofOutput` | 32 | BlobProofOutput::hashed (blob_tx_hash ‖ original_proof_hash ‖ program_id ‖ HyliOutput::hashed) |
 | `hash/model/blob_simple.bin` | `hyli_model::Blob` | 32 | Blob::hashed for the matching borsh fixture |
 | `hash/model/blob_transaction.bin` | `hyli_model::BlobTransaction` | 32 | BlobTransaction::hashed for the matching borsh fixture |

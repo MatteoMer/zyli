@@ -145,11 +145,19 @@ pub const borsh = struct {
 
 pub const crypto = struct {
     pub const bls = struct {
+        pub const cross_impl_agg_msg: []const u8 = @embedFile("corpus/crypto/bls/cross_impl_agg_msg.bin");
+        pub const cross_impl_agg_pubkey_1: []const u8 = @embedFile("corpus/crypto/bls/cross_impl_agg_pubkey_1.bin");
+        pub const cross_impl_agg_pubkey_2: []const u8 = @embedFile("corpus/crypto/bls/cross_impl_agg_pubkey_2.bin");
+        pub const cross_impl_agg_pubkey_3: []const u8 = @embedFile("corpus/crypto/bls/cross_impl_agg_pubkey_3.bin");
+        pub const cross_impl_agg_signature: []const u8 = @embedFile("corpus/crypto/bls/cross_impl_agg_signature.bin");
         pub const cross_impl_msg: []const u8 = @embedFile("corpus/crypto/bls/cross_impl_msg.bin");
         pub const cross_impl_msg_alt: []const u8 = @embedFile("corpus/crypto/bls/cross_impl_msg_alt.bin");
+        pub const cross_impl_msg_long: []const u8 = @embedFile("corpus/crypto/bls/cross_impl_msg_long.bin");
         pub const cross_impl_pubkey: []const u8 = @embedFile("corpus/crypto/bls/cross_impl_pubkey.bin");
         pub const cross_impl_signature: []const u8 = @embedFile("corpus/crypto/bls/cross_impl_signature.bin");
         pub const cross_impl_signature_alt: []const u8 = @embedFile("corpus/crypto/bls/cross_impl_signature_alt.bin");
+        pub const cross_impl_signature_empty_msg: []const u8 = @embedFile("corpus/crypto/bls/cross_impl_signature_empty_msg.bin");
+        pub const cross_impl_signature_long_msg: []const u8 = @embedFile("corpus/crypto/bls/cross_impl_signature_long_msg.bin");
     };
 };
 

@@ -2513,6 +2513,132 @@ fn main() {
             "Signature over the alternate message — verifies against msg_alt only".to_string(),
             sig2_compressed.to_vec(),
         );
+
+        // Edge cases for hash-to-curve / signing path:
+        //   - empty message (0 bytes)
+        //   - very long message (> SHA-256 block size, exercises the
+        //     expand_message_xmd b_i chain past b_1)
+        let empty_msg: &[u8] = b"";
+        let sig_empty: Signature = sk.sign(empty_msg, dst, &[]);
+        let sig_empty_compressed: [u8; 96] = sig_empty.compress();
+        gen.write_bytes(
+            "crypto",
+            "bls/cross_impl_signature_empty_msg",
+            "blst::min_pk::Signature (compressed)",
+            "Signature over the empty message — exercises hash-to-curve edge case".to_string(),
+            sig_empty_compressed.to_vec(),
+        );
+
+        let long_msg: Vec<u8> = (0..256u16).map(|i| (i & 0xff) as u8).collect();
+        let sig_long: Signature = sk.sign(&long_msg, dst, &[]);
+        let sig_long_compressed: [u8; 96] = sig_long.compress();
+        gen.write_bytes(
+            "crypto",
+            "bls/cross_impl_msg_long",
+            "&[u8]",
+            "256-byte message exercising expand_message_xmd b_i chain".to_string(),
+            long_msg.clone(),
+        );
+        gen.write_bytes(
+            "crypto",
+            "bls/cross_impl_signature_long_msg",
+            "blst::min_pk::Signature (compressed)",
+            "Signature over the 256-byte message".to_string(),
+            sig_long_compressed.to_vec(),
+        );
+
+        // ---- Aggregate signature test vector ----
+        //
+        // Three signers, all signing the same message. Aggregate the
+        // signatures via blst::min_pk::AggregateSignature, then dump:
+        //   - the three individual public keys (compressed)
+        //   - the message
+        //   - the aggregate signature (compressed)
+        //
+        // The Zig verifyAggregate path consumes (pks list, msg, agg_sig)
+        // and must accept this same vector.
+        use blst::min_pk::AggregateSignature;
+        let agg_msg = b"agg test vector v1: three signers same message";
+        let ikm2: [u8; 32] = [
+            0x20, 0x21, 0x22, 0x23, 0x24, 0x25, 0x26, 0x27, 0x28, 0x29, 0x2a, 0x2b, 0x2c, 0x2d,
+            0x2e, 0x2f, 0x30, 0x31, 0x32, 0x33, 0x34, 0x35, 0x36, 0x37, 0x38, 0x39, 0x3a, 0x3b,
+            0x3c, 0x3d, 0x3e, 0x3f,
+        ];
+        let ikm3: [u8; 32] = [
+            0x40, 0x41, 0x42, 0x43, 0x44, 0x45, 0x46, 0x47, 0x48, 0x49, 0x4a, 0x4b, 0x4c, 0x4d,
+            0x4e, 0x4f, 0x50, 0x51, 0x52, 0x53, 0x54, 0x55, 0x56, 0x57, 0x58, 0x59, 0x5a, 0x5b,
+            0x5c, 0x5d, 0x5e, 0x5f,
+        ];
+        let sk2 = SecretKey::key_gen(&ikm2, &[]).expect("blst sk2");
+        let sk3 = SecretKey::key_gen(&ikm3, &[]).expect("blst sk3");
+        let pk2 = sk2.sk_to_pk();
+        let pk3 = sk3.sk_to_pk();
+        let agg_sig1 = sk.sign(agg_msg, dst, &[]);
+        let agg_sig2 = sk2.sign(agg_msg, dst, &[]);
+        let agg_sig3 = sk3.sign(agg_msg, dst, &[]);
+
+        let aggregated = AggregateSignature::aggregate(
+            &[&agg_sig1, &agg_sig2, &agg_sig3],
+            true,
+        )
+        .expect("aggregate");
+        let aggregate_signature: Signature = aggregated.to_signature();
+        let aggregate_compressed: [u8; 96] = aggregate_signature.compress();
+
+        // Sanity check: the aggregate must verify under blst's own
+        // multi-pubkey verifier. (We use fast_aggregate_verify which
+        // assumes all pks signed the same message — exactly Hyli's case.)
+        assert!(
+            matches!(
+                aggregate_signature.fast_aggregate_verify(
+                    true,
+                    agg_msg,
+                    dst,
+                    &[&pk, &pk2, &pk3],
+                ),
+                blst::BLST_ERROR::BLST_SUCCESS,
+            ),
+            "blst-produced aggregate failed blst's own verifier",
+        );
+
+        gen.write_bytes(
+            "crypto",
+            "bls/cross_impl_agg_msg",
+            "&[u8]",
+            "Message bytes signed by three validators in the cross-impl aggregate test"
+                .to_string(),
+            agg_msg.to_vec(),
+        );
+        gen.write_bytes(
+            "crypto",
+            "bls/cross_impl_agg_pubkey_1",
+            "blst::min_pk::PublicKey (compressed)",
+            "First validator pubkey in the cross-impl aggregate test".to_string(),
+            pk_compressed.to_vec(),
+        );
+        let pk2_compressed: [u8; 48] = pk2.compress();
+        gen.write_bytes(
+            "crypto",
+            "bls/cross_impl_agg_pubkey_2",
+            "blst::min_pk::PublicKey (compressed)",
+            "Second validator pubkey in the cross-impl aggregate test".to_string(),
+            pk2_compressed.to_vec(),
+        );
+        let pk3_compressed: [u8; 48] = pk3.compress();
+        gen.write_bytes(
+            "crypto",
+            "bls/cross_impl_agg_pubkey_3",
+            "blst::min_pk::PublicKey (compressed)",
+            "Third validator pubkey in the cross-impl aggregate test".to_string(),
+            pk3_compressed.to_vec(),
+        );
+        gen.write_bytes(
+            "crypto",
+            "bls/cross_impl_agg_signature",
+            "blst::min_pk::Signature (compressed)",
+            "Aggregate signature over agg_msg from three signers".to_string(),
+            aggregate_compressed.to_vec(),
+        );
     }
 
     let hyli_rev = detect_hyli_revision();

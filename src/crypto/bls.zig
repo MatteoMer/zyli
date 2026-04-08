@@ -278,6 +278,81 @@ test "verifyBlobBytes: cross-impl signature/message swap rejects" {
     try testing.expect(!ok);
 }
 
+test "verifyBlobBytes: cross-impl empty-message signature verifies" {
+    // Edge case: hash-to-curve over an empty byte string. expand_message_xmd
+    // still produces a uniform 128-byte output, but the H input length is 0.
+    const corpus_mod = @import("corpus");
+    const pk = corpus_mod.crypto.bls.cross_impl_pubkey;
+    const sig_empty = corpus_mod.crypto.bls.cross_impl_signature_empty_msg;
+
+    const ok = try verifyBlobBytes(pk, "", sig_empty);
+    try testing.expect(ok);
+}
+
+test "verifyBlobBytes: cross-impl long-message signature verifies" {
+    // Edge case: 256-byte message. Exercises the b_2 / b_3 / b_4 chain
+    // in expand_message_xmd (the iterative hash that runs once b_1
+    // is exhausted) and stresses the hash-to-curve path with a wider
+    // input than a single SHA-256 block.
+    const corpus_mod = @import("corpus");
+    const pk = corpus_mod.crypto.bls.cross_impl_pubkey;
+    const long_msg = corpus_mod.crypto.bls.cross_impl_msg_long;
+    const sig_long = corpus_mod.crypto.bls.cross_impl_signature_long_msg;
+
+    const ok = try verifyBlobBytes(pk, long_msg, sig_long);
+    try testing.expect(ok);
+}
+
+test "verifyAggregateSig: cross-impl 3-signer aggregate from blst verifies" {
+    // The fixture-gen produced a 3-signer aggregate via
+    // blst::min_pk::AggregateSignature::aggregate. Our verifyAggregate
+    // path must accept it bit-for-bit. This is the rule Hyli uses for
+    // consensus QCs (PrepareQC, CommitQC, TimeoutQC), so a regression
+    // here would invalidate every QC verification.
+    const corpus_mod = @import("corpus");
+    const pk1_bytes = corpus_mod.crypto.bls.cross_impl_agg_pubkey_1;
+    const pk2_bytes = corpus_mod.crypto.bls.cross_impl_agg_pubkey_2;
+    const pk3_bytes = corpus_mod.crypto.bls.cross_impl_agg_pubkey_3;
+    const msg = corpus_mod.crypto.bls.cross_impl_agg_msg;
+    const agg_sig = corpus_mod.crypto.bls.cross_impl_agg_signature;
+
+    const validators = [_]types.ValidatorPublicKey{
+        .{ .bytes = pk1_bytes },
+        .{ .bytes = pk2_bytes },
+        .{ .bytes = pk3_bytes },
+    };
+    const agg: types.AggregateSignature = .{
+        .signature = .{ .bytes = agg_sig },
+        .validators = &validators,
+    };
+
+    const ok = try verifyAggregateSig(testing.allocator, agg, msg);
+    try testing.expect(ok);
+}
+
+test "verifyAggregateSig: cross-impl 3-signer aggregate rejects with one missing pk" {
+    // Same aggregate signature, but only present 2 of the 3 pubkeys
+    // to the verifier. The aggregate pk no longer matches the sum of
+    // signers, so the pairing equation fails.
+    const corpus_mod = @import("corpus");
+    const pk1_bytes = corpus_mod.crypto.bls.cross_impl_agg_pubkey_1;
+    const pk2_bytes = corpus_mod.crypto.bls.cross_impl_agg_pubkey_2;
+    const msg = corpus_mod.crypto.bls.cross_impl_agg_msg;
+    const agg_sig = corpus_mod.crypto.bls.cross_impl_agg_signature;
+
+    const validators = [_]types.ValidatorPublicKey{
+        .{ .bytes = pk1_bytes },
+        .{ .bytes = pk2_bytes },
+    };
+    const agg: types.AggregateSignature = .{
+        .signature = .{ .bytes = agg_sig },
+        .validators = &validators,
+    };
+
+    const ok = try verifyAggregateSig(testing.allocator, agg, msg);
+    try testing.expect(!ok);
+}
+
 test "verifyAggregateSig: rejects empty validator list" {
     // Use an infinity-encoded G2 signature so the decoder accepts it,
     // then assert the empty validator list short-circuits to false.
