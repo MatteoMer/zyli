@@ -5,10 +5,10 @@
 Phase 0 corpus is broad; Phase 3 model + Phase 4 wire layer cover the
 handshake, the replay path, the full consensus message family
 (including Timeout / TimeoutCertificate), the mempool message family,
-the SignedBlock shape, and a stream-driven frame reader. The executable
-exposes a working `observe HOST:PORT` subcommand that connects, decodes
-frames, and prints PING/DATA labels.
-**161 tests passing. 127 fixtures.**
+the SignedBlock shape, a stream-driven frame reader, and a typed
+P2PTcpMessage decoder. The executable's `observe HOST:PORT` subcommand
+prints actual ConsensusNetMessage variant labels for Data frames.
+**167 tests passing. 127 fixtures.**
 
 - `build.zig` / `build.zig.zon` set up; library + executable build cleanly.
 - Borsh codec in `src/model/borsh.zig` covers primitives, options, slices,
@@ -89,9 +89,18 @@ frames, and prints PING/DATA labels.
   end-to-end through the borsh codec.
 - `src/main.zig` is now a small executable with an `observe` subcommand
   that connects to a TCP peer, drives `StreamFrameReader` over a real
-  `std.net.Stream`, and prints `PING`/`DATA` for each frame. It does NOT
-  speak the BLS handshake yet — that lands once `zolt-arith` provides
-  BLS12-381 verification.
+  `std.net.Stream`, and prints either `PING` or the decoded
+  `ConsensusNetMessage` variant label (`Prepare`, `PrepareVote`, …) for
+  each frame. It does NOT speak the BLS handshake yet — that lands once
+  `zolt-arith` provides BLS12-381 verification.
+- `src/wire/protocol.zig` exposes a `decodeP2PTcpMessage(allocator,
+  Data, frame_bytes)` helper that returns a `Decoded(Data)` value
+  backed by an internal arena allocator. The arena shape exists
+  precisely because the borsh decoder leaks intermediate allocations on
+  its error path; routing per-message decodes through an arena means a
+  truncated frame deallocates everything together. `messageLabel(Data,
+  value)` mirrors the upstream `IntoStaticStr` projection on
+  `ConsensusNetMessage` and `MempoolNetMessage`.
 - `src/crypto/signable.zig` pins the BLS DST string used by
   `hyli-crypto::sign_msg` and exposes `signableBytesAlloc(Msg, msg)` —
   the "what bytes get BLS-signed" rule (`borsh::to_vec(&msg)` for any

@@ -12,9 +12,11 @@
 pub const framing = @import("framing.zig");
 pub const tcp_message = @import("tcp_message.zig");
 pub const handshake = @import("handshake.zig");
+pub const protocol = @import("protocol.zig");
 
 test {
     _ = framing;
     _ = tcp_message;
     _ = handshake;
+    _ = protocol;
 }

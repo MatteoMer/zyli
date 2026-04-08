@@ -143,8 +143,42 @@ fn observe(
         const kind = zyli.wire.tcp_message.classifyFrame(frame);
         switch (kind) {
             .ping => try stdout.print("frame {d}: PING ({d} bytes)\n", .{ frame_count, frame.len }),
-            .data => try stdout.print("frame {d}: DATA ({d} bytes)\n", .{ frame_count, frame.len }),
+            .data => try printDataFrame(allocator, stdout, frame_count, frame),
         }
         try stdout.flush();
     }
+}
+
+/// Decode a `P2PTcpMessage<ConsensusNetMessage>` from a Data frame and
+/// print its label. We assume the canal is `"p2p"` for now — until the
+/// observer learns to track per-canal context, treating every Data frame
+/// as a consensus message is the right default.
+fn printDataFrame(
+    allocator: std.mem.Allocator,
+    stdout: anytype,
+    frame_index: usize,
+    frame: []const u8,
+) !void {
+    var decoded = zyli.wire.protocol.decodeP2PTcpMessage(
+        allocator,
+        zyli.model.types.ConsensusNetMessage,
+        frame,
+    ) catch |err| {
+        try stdout.print("frame {d}: DATA ({d} bytes) — decode error: {s}\n", .{
+            frame_index,
+            frame.len,
+            @errorName(err),
+        });
+        return;
+    };
+    defer decoded.deinit();
+    const label = zyli.wire.protocol.messageLabel(
+        zyli.model.types.ConsensusNetMessage,
+        decoded.value,
+    );
+    try stdout.print("frame {d}: DATA ({d} bytes) — {s}\n", .{
+        frame_index,
+        frame.len,
+        label,
+    });
 }
