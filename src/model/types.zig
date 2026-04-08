@@ -409,6 +409,157 @@ pub fn P2PTcpMessage(comptime Data: type) type {
     };
 }
 
+// ---------------------------------------------------------------------------
+// Consensus network messages (mirrors of hyli/src/consensus/network.rs)
+// ---------------------------------------------------------------------------
+
+/// `Slot` is a `u64` alias on the Hyli side.
+pub const Slot = u64;
+
+/// `View` is a `u64` alias on the Hyli side.
+pub const View = u64;
+
+/// `consensus::ConsensusMarkerSerde` enum from `network.rs`.
+///
+/// Hyli's consensus markers (`PrepareVoteMarker`, `ConfirmAckMarker`, etc.)
+/// are zero-sized structs that all serialize through this shared 4-variant
+/// enum so each marker gets a distinct, single-byte tag. The byte values
+/// are pinned by the upstream `marker_serialization_bytes_are_unique_and_expected`
+/// test:
+///
+///   PrepareVote          → 0
+///   ConfirmAck           → 1
+///   ConsensusTimeout     → 2
+///   NilConsensusTimeout  → 3
+pub const ConsensusMarker = enum(u8) {
+    prepare_vote,
+    confirm_ack,
+    consensus_timeout,
+    nil_consensus_timeout,
+};
+
+/// `consensus::QuorumCertificate<T>(pub AggregateSignature, pub T)`. The
+/// trailing marker byte is what makes a `PrepareQC` byte-distinct from a
+/// `CommitQC` over the same `AggregateSignature` — the upstream
+/// `quorum_certificate_cannot_be_reused_across_steps` test enforces that.
+///
+/// We model the marker as a separate field so the Zig encoder simply
+/// emits the AggregateSignature followed by the marker byte; the type
+/// alias `PrepareQC` etc. below pin the expected marker for each step.
+pub const QuorumCertificate = struct {
+    aggregate: AggregateSignature,
+    marker: ConsensusMarker,
+};
+
+/// `consensus::PrepareQC = QuorumCertificate<PrepareVoteMarker>`.
+pub const PrepareQC = QuorumCertificate;
+/// `consensus::CommitQC = QuorumCertificate<ConfirmAckMarker>`.
+pub const CommitQC = QuorumCertificate;
+/// `consensus::TimeoutQC = QuorumCertificate<ConsensusTimeoutMarker>`.
+pub const TimeoutQC = QuorumCertificate;
+/// `consensus::NilQC = QuorumCertificate<NilConsensusTimeoutMarker>`.
+pub const NilQC = QuorumCertificate;
+
+/// Inner payload of a `PrepareVote` / `ConfirmAck` value: a tuple of
+/// `(ConsensusProposalHash, marker)`. Borsh encodes 2-tuples positionally,
+/// so a Zig struct with the same field order is wire-equivalent.
+pub const ConsensusVotePayload = struct {
+    consensus_proposal_hash: ConsensusProposalHash,
+    marker: ConsensusMarker,
+};
+
+/// `consensus::PrepareVote = SignedByValidator<(ConsensusProposalHash, PrepareVoteMarker)>`.
+pub const PrepareVote = Signed(ConsensusVotePayload, ValidatorSignature);
+
+/// `consensus::ConfirmAck = SignedByValidator<(ConsensusProposalHash, ConfirmAckMarker)>`.
+pub const ConfirmAck = Signed(ConsensusVotePayload, ValidatorSignature);
+
+/// Forward-declare `ConsensusProposal`-carrying QC tuple for `TCKind` and
+/// `Ticket`. Borsh encodes a 2-tuple `(QuorumCertificate, ConsensusProposal)`
+/// positionally; this struct mirrors that.
+pub const QcWithProposal = struct {
+    quorum_certificate: QuorumCertificate,
+    proposal: ConsensusProposal,
+};
+
+/// `consensus::TCKind` enum.
+pub const TcKind = union(enum) {
+    nil_proposal: NilQC,
+    prepare_qc: QcWithProposal,
+};
+
+/// `consensus::Ticket` enum. Variant order:
+///   0. Genesis
+///   1. CommitQC(CommitQC)
+///   2. TimeoutQC(TimeoutQC, TCKind)
+///   3. ForcedCommitQC(View)
+pub const Ticket = union(enum) {
+    genesis,
+    commit_qc: CommitQC,
+    timeout_qc: TicketTimeoutPayload,
+    forced_commit_qc: View,
+};
+
+/// Inner payload of `Ticket::TimeoutQC(TimeoutQC, TCKind)`. Borsh encodes
+/// the tuple positionally — same trick as `ConsensusVotePayload`.
+pub const TicketTimeoutPayload = struct {
+    timeout_qc: TimeoutQC,
+    tc_kind: TcKind,
+};
+
+/// `Prepare(ConsensusProposal, Ticket, View)` payload of
+/// `ConsensusNetMessage`. Three-tuple → Zig struct.
+pub const PreparePayload = struct {
+    proposal: ConsensusProposal,
+    ticket: Ticket,
+    view: View,
+};
+
+/// `Confirm(PrepareQC, ConsensusProposalHash)` payload. Two-tuple → struct.
+pub const ConfirmPayload = struct {
+    prepare_qc: PrepareQC,
+    consensus_proposal_hash: ConsensusProposalHash,
+};
+
+/// `Commit(CommitQC, ConsensusProposalHash)` payload.
+pub const CommitPayload = struct {
+    commit_qc: CommitQC,
+    consensus_proposal_hash: ConsensusProposalHash,
+};
+
+/// `SyncReply((ValidatorPublicKey, ConsensusProposal, Ticket, View))` payload.
+pub const SyncReplyPayload = struct {
+    sender: ValidatorPublicKey,
+    proposal: ConsensusProposal,
+    ticket: Ticket,
+    view: View,
+};
+
+/// `consensus::ConsensusNetMessage` enum. Variant order matches
+/// `network.rs` exactly.
+///
+/// Note: the `Timeout` and `TimeoutCertificate` variants are not yet
+/// modeled here — they involve a multi-tuple payload over
+/// `(SignedByValidator<(Slot, View, ConsensusProposalHash, marker)>, TimeoutKind)`
+/// which is best handled when those messages get their own dedicated
+/// fixtures and follower-side validation lands. Placeholder slots keep
+/// the variant indices aligned with upstream so a future addition does
+/// not silently shift the discriminant of the variants below it.
+pub const ConsensusNetMessage = union(enum) {
+    prepare: PreparePayload,
+    prepare_vote: PrepareVote,
+    confirm: ConfirmPayload,
+    confirm_ack: ConfirmAck,
+    commit: CommitPayload,
+    /// Placeholder: `Timeout(ConsensusTimeout)` — see comment above.
+    timeout: void,
+    /// Placeholder: `TimeoutCertificate(TimeoutQC, TCKind, Slot, View)`.
+    timeout_certificate: void,
+    validator_candidacy: Signed(ValidatorCandidacy, ValidatorSignature),
+    sync_request: ConsensusProposalHash,
+    sync_reply: SyncReplyPayload,
+};
+
 test "type sizes are platform-stable where it matters" {
     // BlockHeight is u64, not usize.
     try std.testing.expectEqual(@as(usize, 8), @sizeOf(u64));

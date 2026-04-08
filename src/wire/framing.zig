@@ -61,6 +61,108 @@ pub const DecodeResult = union(enum) {
     need_more: usize,
 };
 
+/// Stream-driven frame reader. Wraps a growable buffer and a generic
+/// reader and exposes `nextFrame` — the simplest possible "give me one
+/// complete frame, blocking on the underlying source as needed" API. This
+/// is what the observer drives once it has a `std.net.Stream`.
+///
+/// `Reader` is comptime-duck-typed: any value with a method
+/// `read(self, []u8) !usize` works (`std.net.Stream`, `std.fs.File`,
+/// or a test fake). Returning `0` from `read` is treated as EOF.
+///
+/// Buffer management:
+/// - The internal `buf` grows as bytes arrive and shrinks (via memmove)
+///   when the consumed prefix would otherwise dominate the buffer. This
+///   keeps the steady-state memory bounded by `max_frame_len`.
+/// - Returned slices borrow from the internal buffer and remain valid
+///   until the next `nextFrame` call. Callers that need to keep frame
+///   bytes longer should copy them out.
+pub fn StreamFrameReader(comptime Reader: type) type {
+    return struct {
+        const Self = @This();
+
+        allocator: std.mem.Allocator,
+        buf: std.ArrayList(u8),
+        /// Number of bytes at the start of `buf` that have already been
+        /// returned to the caller. Compacted away once it crosses 4 KiB
+        /// or half the buffer length, whichever is larger.
+        consumed: usize = 0,
+        max_frame_len: usize = default_max_frame_len,
+
+        pub fn init(allocator: std.mem.Allocator) Self {
+            return .{
+                .allocator = allocator,
+                .buf = .empty,
+            };
+        }
+
+        pub fn initWithLimit(allocator: std.mem.Allocator, max: usize) Self {
+            return .{
+                .allocator = allocator,
+                .buf = .empty,
+                .max_frame_len = max,
+            };
+        }
+
+        pub fn deinit(self: *Self) void {
+            self.buf.deinit(self.allocator);
+            self.consumed = 0;
+        }
+
+        /// Read at most one frame from the wire. Returns `null` on EOF
+        /// after a clean (mid-buffer) cut, or an error if EOF arrives in
+        /// the middle of a frame. The returned slice is valid until the
+        /// next call.
+        pub fn nextFrame(self: *Self, reader: Reader) !?[]const u8 {
+            while (true) {
+                // Try to decode a frame from whatever is already buffered.
+                const buffered = self.buf.items[self.consumed..];
+                var decoder = FrameDecoder.initWithLimit(buffered, self.max_frame_len);
+                const result = try decoder.decode();
+                switch (result) {
+                    .frame => |bytes| {
+                        // Advance the consumed cursor past the 4-byte
+                        // header and the payload, then opportunistically
+                        // compact.
+                        self.consumed += 4 + bytes.len;
+                        self.maybeCompact();
+                        return bytes;
+                    },
+                    .need_more => {},
+                }
+                // Read more bytes from the underlying source. Grow the
+                // buffer by a generous chunk so a back-to-back frame
+                // burst doesn't churn the allocator.
+                const chunk = try self.buf.addManyAsSlice(self.allocator, 4096);
+                const n = try reader.read(chunk);
+                if (n == 0) {
+                    // EOF: shrink the buffer back to whatever was
+                    // actually read (none) and report EOF only if we
+                    // were sitting on a clean cut.
+                    self.buf.items.len -= chunk.len;
+                    if (self.consumed == self.buf.items.len) return null;
+                    return error.UnexpectedEof;
+                }
+                // Trim the over-allocated tail back to what was read.
+                self.buf.items.len -= chunk.len - n;
+            }
+        }
+
+        fn maybeCompact(self: *Self) void {
+            // Compact when more than half the buffer is dead bytes AND
+            // the dead prefix is at least 4 KiB. The thresholds avoid
+            // memmove-on-every-frame in the common case while still
+            // bounding the steady-state buffer size.
+            if (self.consumed < 4096) return;
+            if (self.consumed * 2 < self.buf.items.len) return;
+            const live = self.buf.items[self.consumed..];
+            std.mem.copyForwards(u8, self.buf.items[0..live.len], live);
+            self.buf.items.len = live.len;
+            self.consumed = 0;
+        }
+    };
+}
+
 /// Pull-based decoder over an in-memory byte buffer. The decoder does not
 /// own the buffer — it carries a cursor into it. Callers refill the buffer
 /// from a socket and then call `decode` in a loop until they get
@@ -187,4 +289,111 @@ test "FrameDecoder rejects frames over the configured limit" {
     const header = [_]u8{ 0, 0x10, 0, 0 };
     var decoder = FrameDecoder.initWithLimit(&header, 1024);
     try testing.expectError(Error.FrameTooLarge, decoder.decode());
+}
+
+// ---------------------------------------------------------------------------
+// StreamFrameReader tests. We back the reader with a slice fake instead of
+// a real socket so the tests stay hermetic and fast.
+// ---------------------------------------------------------------------------
+
+const SliceReader = struct {
+    bytes: []const u8,
+    pos: usize = 0,
+    /// If non-zero, deliver at most `chunk` bytes per `read` call. Used to
+    /// exercise the buffered-grow path.
+    chunk: usize = 0,
+
+    pub fn init(bytes: []const u8) SliceReader {
+        return .{ .bytes = bytes };
+    }
+
+    pub fn initChunked(bytes: []const u8, chunk: usize) SliceReader {
+        return .{ .bytes = bytes, .chunk = chunk };
+    }
+
+    pub fn read(self: *SliceReader, buf: []u8) !usize {
+        const remaining = self.bytes[self.pos..];
+        if (remaining.len == 0) return 0;
+        var n = @min(remaining.len, buf.len);
+        if (self.chunk != 0) n = @min(n, self.chunk);
+        @memcpy(buf[0..n], remaining[0..n]);
+        self.pos += n;
+        return n;
+    }
+};
+
+test "StreamFrameReader pulls a single PING frame from a slice reader" {
+    var src = SliceReader.init(corpus.wire.messages.tcp_message_ping_framed);
+    var reader = StreamFrameReader(*SliceReader).init(testing.allocator);
+    defer reader.deinit();
+    const frame = try reader.nextFrame(&src);
+    try testing.expect(frame != null);
+    try testing.expectEqualSlices(u8, "PING", frame.?);
+    // Second call: clean EOF.
+    try testing.expect((try reader.nextFrame(&src)) == null);
+}
+
+test "StreamFrameReader handles back-to-back frames" {
+    const a = corpus.wire.messages.tcp_message_ping_framed;
+    const b = corpus.wire.messages.tcp_message_data_simple_framed;
+    var combined = try testing.allocator.alloc(u8, a.len + b.len);
+    defer testing.allocator.free(combined);
+    @memcpy(combined[0..a.len], a);
+    @memcpy(combined[a.len..], b);
+
+    var src = SliceReader.init(combined);
+    var reader = StreamFrameReader(*SliceReader).init(testing.allocator);
+    defer reader.deinit();
+
+    const first = try reader.nextFrame(&src);
+    try testing.expect(first != null);
+    try testing.expectEqualSlices(u8, "PING", first.?);
+
+    const second = try reader.nextFrame(&src);
+    try testing.expect(second != null);
+    try testing.expectEqualSlices(
+        u8,
+        corpus.wire.messages.tcp_message_data_simple_inner,
+        second.?,
+    );
+
+    try testing.expect((try reader.nextFrame(&src)) == null);
+}
+
+test "StreamFrameReader stitches a frame split across many tiny reads" {
+    // 1-byte chunks force the reader to loop several times before a full
+    // frame is available.
+    var src = SliceReader.initChunked(
+        corpus.wire.messages.tcp_message_data_header_framed,
+        1,
+    );
+    var reader = StreamFrameReader(*SliceReader).init(testing.allocator);
+    defer reader.deinit();
+
+    const frame = try reader.nextFrame(&src);
+    try testing.expect(frame != null);
+    try testing.expectEqualSlices(
+        u8,
+        corpus.wire.messages.tcp_message_data_header_inner,
+        frame.?,
+    );
+    try testing.expect((try reader.nextFrame(&src)) == null);
+}
+
+test "StreamFrameReader reports UnexpectedEof on a truncated frame" {
+    // The corpus PING frame is `00 00 00 04 P I N G`. Truncate it after
+    // the header so the reader has bytes but never gets a complete frame.
+    const truncated = corpus.wire.messages.tcp_message_ping_framed[0..6];
+    var src = SliceReader.init(truncated);
+    var reader = StreamFrameReader(*SliceReader).init(testing.allocator);
+    defer reader.deinit();
+    try testing.expectError(error.UnexpectedEof, reader.nextFrame(&src));
+}
+
+test "StreamFrameReader respects the frame length limit" {
+    // Header advertises 64 bytes but the reader is capped at 8.
+    var src = SliceReader.init(&[_]u8{ 0, 0, 0, 64 });
+    var reader = StreamFrameReader(*SliceReader).initWithLimit(testing.allocator, 8);
+    defer reader.deinit();
+    try testing.expectError(Error.FrameTooLarge, reader.nextFrame(&src));
 }

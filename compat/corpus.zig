@@ -8,6 +8,28 @@
 //! Source: hyli git revision `e41899eb582d2d25d13a97a425ec76250484d45c`.
 
 pub const borsh = struct {
+    pub const consensus = struct {
+        pub const commit_qc: []const u8 = @embedFile("corpus/borsh/consensus/commit_qc.bin");
+        pub const confirm_ack: []const u8 = @embedFile("corpus/borsh/consensus/confirm_ack.bin");
+        pub const marker_confirm_ack: []const u8 = @embedFile("corpus/borsh/consensus/marker_confirm_ack.bin");
+        pub const marker_consensus_timeout: []const u8 = @embedFile("corpus/borsh/consensus/marker_consensus_timeout.bin");
+        pub const marker_nil_consensus_timeout: []const u8 = @embedFile("corpus/borsh/consensus/marker_nil_consensus_timeout.bin");
+        pub const marker_prepare_vote: []const u8 = @embedFile("corpus/borsh/consensus/marker_prepare_vote.bin");
+        pub const net_message_commit: []const u8 = @embedFile("corpus/borsh/consensus/net_message_commit.bin");
+        pub const net_message_confirm: []const u8 = @embedFile("corpus/borsh/consensus/net_message_confirm.bin");
+        pub const net_message_confirm_ack: []const u8 = @embedFile("corpus/borsh/consensus/net_message_confirm_ack.bin");
+        pub const net_message_prepare: []const u8 = @embedFile("corpus/borsh/consensus/net_message_prepare.bin");
+        pub const net_message_prepare_vote: []const u8 = @embedFile("corpus/borsh/consensus/net_message_prepare_vote.bin");
+        pub const net_message_sync_reply: []const u8 = @embedFile("corpus/borsh/consensus/net_message_sync_reply.bin");
+        pub const net_message_sync_request: []const u8 = @embedFile("corpus/borsh/consensus/net_message_sync_request.bin");
+        pub const net_message_validator_candidacy: []const u8 = @embedFile("corpus/borsh/consensus/net_message_validator_candidacy.bin");
+        pub const nil_qc: []const u8 = @embedFile("corpus/borsh/consensus/nil_qc.bin");
+        pub const prepare_qc: []const u8 = @embedFile("corpus/borsh/consensus/prepare_qc.bin");
+        pub const prepare_vote: []const u8 = @embedFile("corpus/borsh/consensus/prepare_vote.bin");
+        pub const ticket_commit_qc: []const u8 = @embedFile("corpus/borsh/consensus/ticket_commit_qc.bin");
+        pub const ticket_genesis: []const u8 = @embedFile("corpus/borsh/consensus/ticket_genesis.bin");
+        pub const timeout_qc: []const u8 = @embedFile("corpus/borsh/consensus/timeout_qc.bin");
+    };
     pub const crypto = struct {
         pub const bls_min_pk_dst: []const u8 = @embedFile("corpus/borsh/crypto/bls_min_pk_dst.bin");
         pub const signable_node_connection_data: []const u8 = @embedFile("corpus/borsh/crypto/signable_node_connection_data.bin");

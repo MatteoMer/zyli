@@ -2,9 +2,10 @@
 
 ## Status
 
-Phase 0 corpus is broad; Phase 3 model + Phase 4 wire layer have closed
-the handshake/replay-path gap.
-**117 tests passing. 91 fixtures.**
+Phase 0 corpus is broad; Phase 3 model + Phase 4 wire layer cover the
+handshake, the replay path, the consensus message family, and a
+stream-driven frame reader.
+**143 tests passing. 111 fixtures.**
 
 - `build.zig` / `build.zig.zon` set up; library + executable build cleanly.
 - Borsh codec in `src/model/borsh.zig` covers primitives, options, slices,
@@ -56,9 +57,20 @@ the handshake/replay-path gap.
   `tcp_message.zig` (the `TcpMessage::Ping`/`Data` shape from
   `hyli_net::tcp`, including the `b"PING"` magic that bypasses borsh),
   and `handshake.zig` (the `P2PTcpMessage<Data>` envelope plus
-  `Handshake::{Hello,Verack}` variants). The framing decoder is
-  pull-based with explicit `need_more`/`frame` results so it can be
-  dropped over an `std.net.Stream` later without re-design.
+  `Handshake::{Hello,Verack}` variants). `framing.zig` also exposes
+  `StreamFrameReader(Reader)` — a comptime-generic pull loop over any
+  `read([]u8) !usize`-shaped reader that buffers, decodes, and compacts
+  frame bytes. It is exercised against a slice fake (single-shot,
+  back-to-back, 1-byte chunked, truncated, oversized) so it can be
+  dropped over a real `std.net.Stream` without redesign.
+- The consensus message family from `hyli/src/consensus/network.rs` is
+  pinned in the corpus: `ConsensusMarker` enum, `QuorumCertificate`,
+  `PrepareQC`/`CommitQC`/`TimeoutQC`/`NilQC` aliases, `PrepareVote`,
+  `ConfirmAck`, `Ticket::{Genesis,CommitQC,...}`, and the relevant
+  `ConsensusNetMessage` variants (`Prepare`, `PrepareVote`, `Confirm`,
+  `ConfirmAck`, `Commit`, `ValidatorCandidacy`, `SyncRequest`,
+  `SyncReply`). The Prepare/Commit QC marker-distinctness invariant
+  is asserted both in the fixture-gen and in the Zig tests.
 - `src/crypto/signable.zig` pins the BLS DST string used by
   `hyli-crypto::sign_msg` and exposes `signableBytesAlloc(Msg, msg)` —
   the "what bytes get BLS-signed" rule (`borsh::to_vec(&msg)` for any
@@ -68,6 +80,18 @@ the handshake/replay-path gap.
 
 ## Immediate
 
+- Add `Timeout` and `TimeoutCertificate` fixtures (the multi-tuple
+  payload over `(SignedByValidator<(Slot, View, cph, marker)>,
+  TimeoutKind)`) and lift the placeholder void variants in
+  `ConsensusNetMessage`.
+- Add the mempool message family fixtures (`DataProposal`, `DataVote`,
+  `MempoolNetMessage::{SyncRequest, SyncReply, ...}`) so the lane and
+  PoDA paths get their own executable spec.
+- Add fixtures for `SignedBlock` and the DA stream messages so the
+  follower path has its own corpus before any code lands.
+- Add a tiny observer entry-point that wires `StreamFrameReader` over a
+  `std.net.Stream`, decodes `P2PTcpMessage<ConsensusNetMessage>`, and
+  prints message labels for live testnet traffic.
 - Begin extracting reusable arithmetic from `../zolt` into `zolt-arith`
   (`bigint`, `field`, `ec`, `msm`, `pairing`, `thread_pool`). This is
   Phase 1 of the implementation plan and unblocks BLS12-381.
@@ -75,14 +99,6 @@ the handshake/replay-path gap.
   `zolt-arith`, with vectors borrowed from Rust Hyli / `blst`. Phase 2.
 - Implement signed message header verification (BLS12-381 verify on
   `signable.zig`'s output) once `zolt-arith` BLS lands.
-- Wire `framing.FrameDecoder` over a real `std.net.Stream` to make the
-  observer attempt a live testnet connection.
-- Add fixtures for the rest of the consensus message family
-  (`Prepare`, `PrepareVote`, `Confirm`, `ConfirmAck`, `Commit`,
-  `Timeout`, `TimeoutCertificate`, `SyncRequest`, `SyncReply`) and the
-  matching mempool messages — all behind `Signed<...>` envelopes.
-- Add fixtures for `SignedBlock` and the DA stream messages so the
-  follower path has its own corpus before any code lands.
 
 ## Next
 

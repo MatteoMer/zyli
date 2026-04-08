@@ -1351,6 +1351,373 @@ fn main() {
         p2p_data_bytes,
     );
 
+    // ---- Consensus network messages ---------------------------------------
+    //
+    // Mirrors of the per-step Borsh shapes from
+    // `hyli/src/consensus/network.rs`. The consensus crate is a binary, not
+    // a library, so we redeclare the types locally — same approach as the
+    // wire/handshake mirrors. The wire layout is the contract; if upstream
+    // ever changes a field, the next regeneration breaks the matching Zig
+    // tests loudly.
+    //
+    // Marker types in upstream Hyli use a custom Borsh derive that emits
+    // them through a shared `ConsensusMarkerSerde` enum so the four single-
+    // byte tags (PrepareVote=0, ConfirmAck=1, ConsensusTimeout=2,
+    // NilConsensusTimeout=3) are guaranteed distinct on the wire. We
+    // reproduce that with explicit `u8` constants and pin every byte.
+
+    type ConsensusProposalHashLocal = ConsensusProposalHash;
+    type SlotLocal = u64;
+    type ViewLocal = u64;
+
+    // ConsensusMarkerSerde declared explicitly so the byte values are
+    // pinned. Upstream uses #[derive(BorshSerialize)] on a 4-variant enum,
+    // which Borsh emits as a `u8` discriminant in declaration order.
+    #[derive(borsh::BorshSerialize)]
+    enum ConsensusMarkerSerdeLocal {
+        PrepareVote,
+        ConfirmAck,
+        ConsensusTimeout,
+        NilConsensusTimeout,
+    }
+
+    let prepare_vote_marker_bytes =
+        borsh::to_vec(&ConsensusMarkerSerdeLocal::PrepareVote).expect("borsh PrepareVote marker");
+    let confirm_ack_marker_bytes =
+        borsh::to_vec(&ConsensusMarkerSerdeLocal::ConfirmAck).expect("borsh ConfirmAck marker");
+    let consensus_timeout_marker_bytes = borsh::to_vec(&ConsensusMarkerSerdeLocal::ConsensusTimeout)
+        .expect("borsh ConsensusTimeout marker");
+    let nil_consensus_timeout_marker_bytes =
+        borsh::to_vec(&ConsensusMarkerSerdeLocal::NilConsensusTimeout)
+            .expect("borsh NilConsensusTimeout marker");
+
+    // The upstream `marker_serialization_bytes_are_unique_and_expected`
+    // test asserts these exact bytes — we reuse them as the contract.
+    assert_eq!(prepare_vote_marker_bytes, vec![0u8]);
+    assert_eq!(confirm_ack_marker_bytes, vec![1u8]);
+    assert_eq!(consensus_timeout_marker_bytes, vec![2u8]);
+    assert_eq!(nil_consensus_timeout_marker_bytes, vec![3u8]);
+
+    gen.write_bytes(
+        "borsh",
+        "consensus/marker_prepare_vote",
+        "PrepareVoteMarker",
+        "PrepareVoteMarker (single byte 0)".to_string(),
+        prepare_vote_marker_bytes,
+    );
+    gen.write_bytes(
+        "borsh",
+        "consensus/marker_confirm_ack",
+        "ConfirmAckMarker",
+        "ConfirmAckMarker (single byte 1)".to_string(),
+        confirm_ack_marker_bytes,
+    );
+    gen.write_bytes(
+        "borsh",
+        "consensus/marker_consensus_timeout",
+        "ConsensusTimeoutMarker",
+        "ConsensusTimeoutMarker (single byte 2)".to_string(),
+        consensus_timeout_marker_bytes,
+    );
+    gen.write_bytes(
+        "borsh",
+        "consensus/marker_nil_consensus_timeout",
+        "NilConsensusTimeoutMarker",
+        "NilConsensusTimeoutMarker (single byte 3)".to_string(),
+        nil_consensus_timeout_marker_bytes,
+    );
+
+    // QuorumCertificate<T> is a tuple struct (AggregateSignature, T). The
+    // marker `T` is one of the four marker bytes above, so the wire form
+    // is `borsh(AggregateSignature) ‖ marker_byte`.
+    #[derive(borsh::BorshSerialize)]
+    struct QuorumCertificateLocal<T: borsh::BorshSerialize>(AggregateSignature, T);
+
+    let qc_agg = AggregateSignature {
+        signature: Signature(vec![0xee; 12]),
+        validators: vec![
+            ValidatorPublicKey(vec![0x01; 4]),
+            ValidatorPublicKey(vec![0x02; 4]),
+        ],
+    };
+    let prepare_qc =
+        QuorumCertificateLocal(qc_agg.clone(), ConsensusMarkerSerdeLocal::PrepareVote);
+    gen.write_borsh(
+        "consensus/prepare_qc",
+        "consensus::PrepareQC",
+        "PrepareQC = QuorumCertificate<PrepareVoteMarker>",
+        &prepare_qc,
+    );
+    let commit_qc = QuorumCertificateLocal(qc_agg.clone(), ConsensusMarkerSerdeLocal::ConfirmAck);
+    gen.write_borsh(
+        "consensus/commit_qc",
+        "consensus::CommitQC",
+        "CommitQC = QuorumCertificate<ConfirmAckMarker>",
+        &commit_qc,
+    );
+    let timeout_qc =
+        QuorumCertificateLocal(qc_agg.clone(), ConsensusMarkerSerdeLocal::ConsensusTimeout);
+    gen.write_borsh(
+        "consensus/timeout_qc",
+        "consensus::TimeoutQC",
+        "TimeoutQC = QuorumCertificate<ConsensusTimeoutMarker>",
+        &timeout_qc,
+    );
+    let nil_qc = QuorumCertificateLocal(
+        qc_agg.clone(),
+        ConsensusMarkerSerdeLocal::NilConsensusTimeout,
+    );
+    gen.write_borsh(
+        "consensus/nil_qc",
+        "consensus::NilQC",
+        "NilQC = QuorumCertificate<NilConsensusTimeoutMarker>",
+        &nil_qc,
+    );
+
+    // Pin the QC mismatch invariant: the four QC types differ ONLY in the
+    // trailing marker byte, so a CommitQC must be byte-distinct from a
+    // PrepareQC over the same AggregateSignature. Mirrors the upstream
+    // `quorum_certificate_cannot_be_reused_across_steps` test.
+    let prepare_qc_bytes = borsh::to_vec(&prepare_qc).expect("borsh prepare qc");
+    let commit_qc_bytes = borsh::to_vec(&commit_qc).expect("borsh commit qc");
+    assert_ne!(
+        prepare_qc_bytes, commit_qc_bytes,
+        "PrepareQC and CommitQC must be byte-distinct (marker tag differs)",
+    );
+    assert_eq!(
+        &prepare_qc_bytes[..prepare_qc_bytes.len() - 1],
+        &commit_qc_bytes[..commit_qc_bytes.len() - 1],
+        "Prepare/Commit QC payload bytes must agree except in the trailing marker byte",
+    );
+
+    // PrepareVote = SignedByValidator<(ConsensusProposalHash, PrepareVoteMarker)>.
+    // The tuple `(ConsensusProposalHash, PrepareVoteMarker)` encodes
+    // positionally with no envelope, so the wire is:
+    //   borsh(ConsensusProposalHash) ‖ marker_byte ‖ borsh(ValidatorSignature)
+    //
+    // Note: the upstream type uses an unnamed 2-tuple as the inner Signed
+    // payload — we redeclare it explicitly so the local mirror is
+    // unambiguous.
+    let cph_demo = ConsensusProposalHash(b"cp-1".to_vec());
+    let validator_sig_demo = ValidatorSignature {
+        signature: Signature(vec![0xff; 8]),
+        validator: ValidatorPublicKey(vec![0x01; 4]),
+    };
+    let prepare_vote_payload = (
+        cph_demo.clone(),
+        ConsensusMarkerSerdeLocal::PrepareVote,
+    );
+    let prepare_vote = Signed::<
+        (ConsensusProposalHashLocal, ConsensusMarkerSerdeLocal),
+        ValidatorSignature,
+    > {
+        msg: prepare_vote_payload,
+        signature: validator_sig_demo.clone(),
+    };
+    gen.write_borsh(
+        "consensus/prepare_vote",
+        "consensus::PrepareVote",
+        "SignedByValidator<(ConsensusProposalHash, PrepareVoteMarker)>",
+        &prepare_vote,
+    );
+
+    let confirm_ack_payload = (cph_demo.clone(), ConsensusMarkerSerdeLocal::ConfirmAck);
+    let confirm_ack = Signed::<
+        (ConsensusProposalHashLocal, ConsensusMarkerSerdeLocal),
+        ValidatorSignature,
+    > {
+        msg: confirm_ack_payload,
+        signature: validator_sig_demo.clone(),
+    };
+    gen.write_borsh(
+        "consensus/confirm_ack",
+        "consensus::ConfirmAck",
+        "SignedByValidator<(ConsensusProposalHash, ConfirmAckMarker)>",
+        &confirm_ack,
+    );
+
+    // Ticket enum: Genesis, CommitQC(CommitQC), TimeoutQC(TimeoutQC, TCKind),
+    // ForcedCommitQC(View).
+    #[derive(borsh::BorshSerialize)]
+    enum TicketLocal {
+        Genesis,
+        CommitQC(QuorumCertificateLocal<ConsensusMarkerSerdeLocal>),
+        #[allow(dead_code)]
+        TimeoutQC(QuorumCertificateLocal<ConsensusMarkerSerdeLocal>, TCKindLocal),
+        #[allow(dead_code)]
+        ForcedCommitQC(ViewLocal),
+    }
+
+    #[derive(borsh::BorshSerialize)]
+    enum TCKindLocal {
+        #[allow(dead_code)]
+        NilProposal(QuorumCertificateLocal<ConsensusMarkerSerdeLocal>),
+        #[allow(dead_code)]
+        PrepareQC((QuorumCertificateLocal<ConsensusMarkerSerdeLocal>, ConsensusProposal)),
+    }
+
+    gen.write_borsh(
+        "consensus/ticket_genesis",
+        "consensus::Ticket",
+        "Ticket::Genesis (single byte tag)",
+        &TicketLocal::Genesis,
+    );
+    let ticket_commit = TicketLocal::CommitQC(QuorumCertificateLocal(
+        qc_agg.clone(),
+        ConsensusMarkerSerdeLocal::ConfirmAck,
+    ));
+    gen.write_borsh(
+        "consensus/ticket_commit_qc",
+        "consensus::Ticket",
+        "Ticket::CommitQC(commit_qc)",
+        &ticket_commit,
+    );
+
+    // ConsensusNetMessage enum. We pin the simpler variants here:
+    // SyncRequest, ValidatorCandidacy, PrepareVote, ConfirmAck. The more
+    // complex `Prepare`, `Confirm`, `Commit`, `Timeout`, and
+    // `TimeoutCertificate` variants get separate fixtures below.
+    #[derive(borsh::BorshSerialize)]
+    enum ConsensusNetMessageLocal {
+        Prepare(ConsensusProposal, TicketLocal, ViewLocal),
+        PrepareVote(
+            Signed<
+                (ConsensusProposalHashLocal, ConsensusMarkerSerdeLocal),
+                ValidatorSignature,
+            >,
+        ),
+        Confirm(
+            QuorumCertificateLocal<ConsensusMarkerSerdeLocal>,
+            ConsensusProposalHashLocal,
+        ),
+        ConfirmAck(
+            Signed<
+                (ConsensusProposalHashLocal, ConsensusMarkerSerdeLocal),
+                ValidatorSignature,
+            >,
+        ),
+        Commit(
+            QuorumCertificateLocal<ConsensusMarkerSerdeLocal>,
+            ConsensusProposalHashLocal,
+        ),
+        #[allow(dead_code)]
+        Timeout(()),
+        #[allow(dead_code)]
+        TimeoutCertificate(
+            QuorumCertificateLocal<ConsensusMarkerSerdeLocal>,
+            TCKindLocal,
+            SlotLocal,
+            ViewLocal,
+        ),
+        ValidatorCandidacy(Signed<ValidatorCandidacy, ValidatorSignature>),
+        SyncRequest(ConsensusProposalHashLocal),
+        SyncReply(
+            (
+                ValidatorPublicKey,
+                ConsensusProposal,
+                TicketLocal,
+                ViewLocal,
+            ),
+        ),
+    }
+
+    // Variant 0: Prepare(ConsensusProposal, Ticket, View). We reuse the
+    // populated cp_full and the Genesis ticket so the byte content is
+    // deterministic.
+    let prepare_msg = ConsensusNetMessageLocal::Prepare(cp_full.clone(), TicketLocal::Genesis, 7);
+    gen.write_borsh(
+        "consensus/net_message_prepare",
+        "consensus::ConsensusNetMessage",
+        "ConsensusNetMessage::Prepare(cp_full, Ticket::Genesis, view=7)",
+        &prepare_msg,
+    );
+
+    // Variant 1: PrepareVote(SignedByValidator<(cph, marker)>)
+    let prepare_vote_msg = ConsensusNetMessageLocal::PrepareVote(Signed::<
+        (ConsensusProposalHashLocal, ConsensusMarkerSerdeLocal),
+        ValidatorSignature,
+    > {
+        msg: (cph_demo.clone(), ConsensusMarkerSerdeLocal::PrepareVote),
+        signature: validator_sig_demo.clone(),
+    });
+    gen.write_borsh(
+        "consensus/net_message_prepare_vote",
+        "consensus::ConsensusNetMessage",
+        "ConsensusNetMessage::PrepareVote(prepare_vote)",
+        &prepare_vote_msg,
+    );
+
+    // Variant 2: Confirm(PrepareQC, ConsensusProposalHash)
+    let confirm_msg = ConsensusNetMessageLocal::Confirm(
+        QuorumCertificateLocal(qc_agg.clone(), ConsensusMarkerSerdeLocal::PrepareVote),
+        cph_demo.clone(),
+    );
+    gen.write_borsh(
+        "consensus/net_message_confirm",
+        "consensus::ConsensusNetMessage",
+        "ConsensusNetMessage::Confirm(prepare_qc, cph)",
+        &confirm_msg,
+    );
+
+    // Variant 3: ConfirmAck(SignedByValidator<(cph, marker)>)
+    let confirm_ack_msg = ConsensusNetMessageLocal::ConfirmAck(Signed::<
+        (ConsensusProposalHashLocal, ConsensusMarkerSerdeLocal),
+        ValidatorSignature,
+    > {
+        msg: (cph_demo.clone(), ConsensusMarkerSerdeLocal::ConfirmAck),
+        signature: validator_sig_demo.clone(),
+    });
+    gen.write_borsh(
+        "consensus/net_message_confirm_ack",
+        "consensus::ConsensusNetMessage",
+        "ConsensusNetMessage::ConfirmAck(confirm_ack)",
+        &confirm_ack_msg,
+    );
+
+    // Variant 4: Commit(CommitQC, ConsensusProposalHash)
+    let commit_msg = ConsensusNetMessageLocal::Commit(
+        QuorumCertificateLocal(qc_agg.clone(), ConsensusMarkerSerdeLocal::ConfirmAck),
+        cph_demo.clone(),
+    );
+    gen.write_borsh(
+        "consensus/net_message_commit",
+        "consensus::ConsensusNetMessage",
+        "ConsensusNetMessage::Commit(commit_qc, cph)",
+        &commit_msg,
+    );
+
+    // Variant 7: ValidatorCandidacy(SignedByValidator<ValidatorCandidacy>)
+    let candidacy_msg = ConsensusNetMessageLocal::ValidatorCandidacy(signed_candidacy.clone());
+    gen.write_borsh(
+        "consensus/net_message_validator_candidacy",
+        "consensus::ConsensusNetMessage",
+        "ConsensusNetMessage::ValidatorCandidacy(signed_candidacy)",
+        &candidacy_msg,
+    );
+
+    // Variant 8: SyncRequest(ConsensusProposalHash)
+    let sync_request_msg = ConsensusNetMessageLocal::SyncRequest(cph_demo.clone());
+    gen.write_borsh(
+        "consensus/net_message_sync_request",
+        "consensus::ConsensusNetMessage",
+        "ConsensusNetMessage::SyncRequest(cph)",
+        &sync_request_msg,
+    );
+
+    // Variant 9: SyncReply((ValidatorPublicKey, ConsensusProposal, Ticket, View))
+    let sync_reply_msg = ConsensusNetMessageLocal::SyncReply((
+        ValidatorPublicKey(vec![0x03; 4]),
+        cp_empty.clone(),
+        TicketLocal::Genesis,
+        12,
+    ));
+    gen.write_borsh(
+        "consensus/net_message_sync_reply",
+        "consensus::ConsensusNetMessage",
+        "ConsensusNetMessage::SyncReply((sender, cp_empty, Genesis, view=12))",
+        &sync_reply_msg,
+    );
+
     // ---- Crypto: BLS signable payload reference ---------------------------
     //
     // For every `Signed<T, V>` value Hyli puts on the wire, the bytes that

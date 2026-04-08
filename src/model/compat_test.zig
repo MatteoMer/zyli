@@ -699,6 +699,348 @@ test "fixture: SignedByValidator<NodeConnectionData>" {
     );
 }
 
+// ---------------------------------------------------------------------------
+// Consensus markers — single-byte enum tags. The upstream
+// `marker_serialization_bytes_are_unique_and_expected` test asserts these
+// exact bytes, so we mirror that contract on the Zig side.
+// ---------------------------------------------------------------------------
+
+test "fixture: PrepareVoteMarker (byte 0)" {
+    try expectMatchesFixture(
+        types.ConsensusMarker,
+        .prepare_vote,
+        corpus.borsh.consensus.marker_prepare_vote,
+    );
+    try testing.expectEqualSlices(
+        u8,
+        &[_]u8{0},
+        corpus.borsh.consensus.marker_prepare_vote,
+    );
+}
+
+test "fixture: ConfirmAckMarker (byte 1)" {
+    try expectMatchesFixture(
+        types.ConsensusMarker,
+        .confirm_ack,
+        corpus.borsh.consensus.marker_confirm_ack,
+    );
+    try testing.expectEqualSlices(
+        u8,
+        &[_]u8{1},
+        corpus.borsh.consensus.marker_confirm_ack,
+    );
+}
+
+test "fixture: ConsensusTimeoutMarker (byte 2)" {
+    try expectMatchesFixture(
+        types.ConsensusMarker,
+        .consensus_timeout,
+        corpus.borsh.consensus.marker_consensus_timeout,
+    );
+    try testing.expectEqualSlices(
+        u8,
+        &[_]u8{2},
+        corpus.borsh.consensus.marker_consensus_timeout,
+    );
+}
+
+test "fixture: NilConsensusTimeoutMarker (byte 3)" {
+    try expectMatchesFixture(
+        types.ConsensusMarker,
+        .nil_consensus_timeout,
+        corpus.borsh.consensus.marker_nil_consensus_timeout,
+    );
+    try testing.expectEqualSlices(
+        u8,
+        &[_]u8{3},
+        corpus.borsh.consensus.marker_nil_consensus_timeout,
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Quorum certificates — `(AggregateSignature, marker_byte)`. The four QC
+// types differ only in the trailing marker byte.
+// ---------------------------------------------------------------------------
+
+fn sampleAggregateSignature() types.AggregateSignature {
+    return .{
+        .signature = .{ .bytes = &[_]u8{0xee} ** 12 },
+        .validators = &[_]types.ValidatorPublicKey{
+            .{ .bytes = &[_]u8{0x01} ** 4 },
+            .{ .bytes = &[_]u8{0x02} ** 4 },
+        },
+    };
+}
+
+test "fixture: PrepareQC = (AggregateSignature, PrepareVoteMarker)" {
+    const value: types.PrepareQC = .{
+        .aggregate = sampleAggregateSignature(),
+        .marker = .prepare_vote,
+    };
+    try expectMatchesFixture(types.PrepareQC, value, corpus.borsh.consensus.prepare_qc);
+}
+
+test "fixture: CommitQC = (AggregateSignature, ConfirmAckMarker)" {
+    const value: types.CommitQC = .{
+        .aggregate = sampleAggregateSignature(),
+        .marker = .confirm_ack,
+    };
+    try expectMatchesFixture(types.CommitQC, value, corpus.borsh.consensus.commit_qc);
+}
+
+test "fixture: TimeoutQC = (AggregateSignature, ConsensusTimeoutMarker)" {
+    const value: types.TimeoutQC = .{
+        .aggregate = sampleAggregateSignature(),
+        .marker = .consensus_timeout,
+    };
+    try expectMatchesFixture(types.TimeoutQC, value, corpus.borsh.consensus.timeout_qc);
+}
+
+test "fixture: NilQC = (AggregateSignature, NilConsensusTimeoutMarker)" {
+    const value: types.NilQC = .{
+        .aggregate = sampleAggregateSignature(),
+        .marker = .nil_consensus_timeout,
+    };
+    try expectMatchesFixture(types.NilQC, value, corpus.borsh.consensus.nil_qc);
+}
+
+test "Prepare/Commit QC bytes differ only in the trailing marker byte" {
+    const prepare = corpus.borsh.consensus.prepare_qc;
+    const commit = corpus.borsh.consensus.commit_qc;
+    try testing.expectEqual(prepare.len, commit.len);
+    try testing.expectEqualSlices(u8, prepare[0 .. prepare.len - 1], commit[0 .. commit.len - 1]);
+    try testing.expect(prepare[prepare.len - 1] != commit[commit.len - 1]);
+}
+
+// ---------------------------------------------------------------------------
+// PrepareVote / ConfirmAck — signed envelopes around a (cph, marker) tuple.
+// ---------------------------------------------------------------------------
+
+fn sampleValidatorSignature() types.ValidatorSignature {
+    return .{
+        .signature = .{ .bytes = &[_]u8{0xff} ** 8 },
+        .validator = .{ .bytes = &[_]u8{0x01} ** 4 },
+    };
+}
+
+test "fixture: PrepareVote = SignedByValidator<(cph, PrepareVoteMarker)>" {
+    const value: types.PrepareVote = .{
+        .msg = .{
+            .consensus_proposal_hash = .{ .bytes = "cp-1" },
+            .marker = .prepare_vote,
+        },
+        .signature = sampleValidatorSignature(),
+    };
+    try expectMatchesFixture(types.PrepareVote, value, corpus.borsh.consensus.prepare_vote);
+}
+
+test "fixture: ConfirmAck = SignedByValidator<(cph, ConfirmAckMarker)>" {
+    const value: types.ConfirmAck = .{
+        .msg = .{
+            .consensus_proposal_hash = .{ .bytes = "cp-1" },
+            .marker = .confirm_ack,
+        },
+        .signature = sampleValidatorSignature(),
+    };
+    try expectMatchesFixture(types.ConfirmAck, value, corpus.borsh.consensus.confirm_ack);
+}
+
+// ---------------------------------------------------------------------------
+// Ticket
+// ---------------------------------------------------------------------------
+
+test "fixture: Ticket::Genesis" {
+    try expectMatchesFixture(
+        types.Ticket,
+        .genesis,
+        corpus.borsh.consensus.ticket_genesis,
+    );
+}
+
+test "fixture: Ticket::CommitQC(commit_qc)" {
+    const value: types.Ticket = .{
+        .commit_qc = .{
+            .aggregate = sampleAggregateSignature(),
+            .marker = .confirm_ack,
+        },
+    };
+    try expectMatchesFixture(
+        types.Ticket,
+        value,
+        corpus.borsh.consensus.ticket_commit_qc,
+    );
+}
+
+// ---------------------------------------------------------------------------
+// ConsensusNetMessage variants. Each one is a separate test so a regression
+// in any single variant points to exactly the tag/payload that drifted.
+// ---------------------------------------------------------------------------
+
+fn sampleConsensusProposalFull() types.ConsensusProposal {
+    const lane: types.LaneId = .{
+        .operator = .{ .bytes = &[_]u8{0x01} ** 4 },
+        .suffix = "lane-a",
+    };
+    return .{
+        .slot = 7,
+        .parent_hash = .{ .bytes = "prev-cp" },
+        .cut = &[_]types.CutEntry{
+            .{
+                .lane_id = lane,
+                .dp_hash = .{ .bytes = "dp-hash" },
+                .lane_bytes_size = .{ .bytes = 8192 },
+                .aggregate_signature = .{
+                    .signature = .{ .bytes = &[_]u8{0xee} ** 12 },
+                    .validators = &[_]types.ValidatorPublicKey{
+                        .{ .bytes = &[_]u8{0x01} ** 4 },
+                    },
+                },
+            },
+        },
+        .staking_actions = &[_]types.ConsensusStakingAction{
+            .{ .pay_fees_for_dadi = .{
+                .lane_id = lane,
+                .cumul_size = .{ .bytes = 8192 },
+            } },
+        },
+        .timestamp = .{ .millis = 9999 },
+    };
+}
+
+fn sampleConsensusProposalEmpty() types.ConsensusProposal {
+    return .{
+        .slot = 1,
+        .parent_hash = .{ .bytes = "genesis" },
+        .cut = &[_]types.CutEntry{},
+        .staking_actions = &[_]types.ConsensusStakingAction{},
+        .timestamp = .{ .millis = 1234 },
+    };
+}
+
+test "fixture: ConsensusNetMessage::Prepare" {
+    const value: types.ConsensusNetMessage = .{
+        .prepare = .{
+            .proposal = sampleConsensusProposalFull(),
+            .ticket = .genesis,
+            .view = 7,
+        },
+    };
+    try expectMatchesFixture(
+        types.ConsensusNetMessage,
+        value,
+        corpus.borsh.consensus.net_message_prepare,
+    );
+}
+
+test "fixture: ConsensusNetMessage::PrepareVote" {
+    const value: types.ConsensusNetMessage = .{
+        .prepare_vote = .{
+            .msg = .{
+                .consensus_proposal_hash = .{ .bytes = "cp-1" },
+                .marker = .prepare_vote,
+            },
+            .signature = sampleValidatorSignature(),
+        },
+    };
+    try expectMatchesFixture(
+        types.ConsensusNetMessage,
+        value,
+        corpus.borsh.consensus.net_message_prepare_vote,
+    );
+}
+
+test "fixture: ConsensusNetMessage::Confirm" {
+    const value: types.ConsensusNetMessage = .{
+        .confirm = .{
+            .prepare_qc = .{
+                .aggregate = sampleAggregateSignature(),
+                .marker = .prepare_vote,
+            },
+            .consensus_proposal_hash = .{ .bytes = "cp-1" },
+        },
+    };
+    try expectMatchesFixture(
+        types.ConsensusNetMessage,
+        value,
+        corpus.borsh.consensus.net_message_confirm,
+    );
+}
+
+test "fixture: ConsensusNetMessage::ConfirmAck" {
+    const value: types.ConsensusNetMessage = .{
+        .confirm_ack = .{
+            .msg = .{
+                .consensus_proposal_hash = .{ .bytes = "cp-1" },
+                .marker = .confirm_ack,
+            },
+            .signature = sampleValidatorSignature(),
+        },
+    };
+    try expectMatchesFixture(
+        types.ConsensusNetMessage,
+        value,
+        corpus.borsh.consensus.net_message_confirm_ack,
+    );
+}
+
+test "fixture: ConsensusNetMessage::Commit" {
+    const value: types.ConsensusNetMessage = .{
+        .commit = .{
+            .commit_qc = .{
+                .aggregate = sampleAggregateSignature(),
+                .marker = .confirm_ack,
+            },
+            .consensus_proposal_hash = .{ .bytes = "cp-1" },
+        },
+    };
+    try expectMatchesFixture(
+        types.ConsensusNetMessage,
+        value,
+        corpus.borsh.consensus.net_message_commit,
+    );
+}
+
+test "fixture: ConsensusNetMessage::ValidatorCandidacy" {
+    const value: types.ConsensusNetMessage = .{
+        .validator_candidacy = .{
+            .msg = .{ .peer_address = "127.0.0.1:4242" },
+            .signature = sampleValidatorSignature(),
+        },
+    };
+    try expectMatchesFixture(
+        types.ConsensusNetMessage,
+        value,
+        corpus.borsh.consensus.net_message_validator_candidacy,
+    );
+}
+
+test "fixture: ConsensusNetMessage::SyncRequest" {
+    const value: types.ConsensusNetMessage = .{
+        .sync_request = .{ .bytes = "cp-1" },
+    };
+    try expectMatchesFixture(
+        types.ConsensusNetMessage,
+        value,
+        corpus.borsh.consensus.net_message_sync_request,
+    );
+}
+
+test "fixture: ConsensusNetMessage::SyncReply" {
+    const value: types.ConsensusNetMessage = .{
+        .sync_reply = .{
+            .sender = .{ .bytes = &[_]u8{0x03} ** 4 },
+            .proposal = sampleConsensusProposalEmpty(),
+            .ticket = .genesis,
+            .view = 12,
+        },
+    };
+    try expectMatchesFixture(
+        types.ConsensusNetMessage,
+        value,
+        corpus.borsh.consensus.net_message_sync_reply,
+    );
+}
+
 test "fixture: ConsensusProposal (one cut entry, one PayFeesForDaDi)" {
     const lane: types.LaneId = .{
         .operator = .{ .bytes = &[_]u8{0x01} ** 4 },

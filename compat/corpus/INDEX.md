@@ -6,6 +6,26 @@ Source: `hyli` git revision `e41899eb582d2d25d13a97a425ec76250484d45c`.
 
 | Path | Rust type | Bytes | Description |
 |------|-----------|-------|-------------|
+| `borsh/consensus/commit_qc.bin` | `consensus::CommitQC` | 37 | CommitQC = QuorumCertificate<ConfirmAckMarker> |
+| `borsh/consensus/confirm_ack.bin` | `consensus::ConfirmAck` | 29 | SignedByValidator<(ConsensusProposalHash, ConfirmAckMarker)> |
+| `borsh/consensus/marker_confirm_ack.bin` | `ConfirmAckMarker` | 1 | ConfirmAckMarker (single byte 1) |
+| `borsh/consensus/marker_consensus_timeout.bin` | `ConsensusTimeoutMarker` | 1 | ConsensusTimeoutMarker (single byte 2) |
+| `borsh/consensus/marker_nil_consensus_timeout.bin` | `NilConsensusTimeoutMarker` | 1 | NilConsensusTimeoutMarker (single byte 3) |
+| `borsh/consensus/marker_prepare_vote.bin` | `PrepareVoteMarker` | 1 | PrepareVoteMarker (single byte 0) |
+| `borsh/consensus/net_message_commit.bin` | `consensus::ConsensusNetMessage` | 46 | ConsensusNetMessage::Commit(commit_qc, cph) |
+| `borsh/consensus/net_message_confirm.bin` | `consensus::ConsensusNetMessage` | 46 | ConsensusNetMessage::Confirm(prepare_qc, cph) |
+| `borsh/consensus/net_message_confirm_ack.bin` | `consensus::ConsensusNetMessage` | 30 | ConsensusNetMessage::ConfirmAck(confirm_ack) |
+| `borsh/consensus/net_message_prepare.bin` | `consensus::ConsensusNetMessage` | 145 | ConsensusNetMessage::Prepare(cp_full, Ticket::Genesis, view=7) |
+| `borsh/consensus/net_message_prepare_vote.bin` | `consensus::ConsensusNetMessage` | 30 | ConsensusNetMessage::PrepareVote(prepare_vote) |
+| `borsh/consensus/net_message_sync_reply.bin` | `consensus::ConsensusNetMessage` | 61 | ConsensusNetMessage::SyncReply((sender, cp_empty, Genesis, view=12)) |
+| `borsh/consensus/net_message_sync_request.bin` | `consensus::ConsensusNetMessage` | 9 | ConsensusNetMessage::SyncRequest(cph) |
+| `borsh/consensus/net_message_validator_candidacy.bin` | `consensus::ConsensusNetMessage` | 39 | ConsensusNetMessage::ValidatorCandidacy(signed_candidacy) |
+| `borsh/consensus/nil_qc.bin` | `consensus::NilQC` | 37 | NilQC = QuorumCertificate<NilConsensusTimeoutMarker> |
+| `borsh/consensus/prepare_qc.bin` | `consensus::PrepareQC` | 37 | PrepareQC = QuorumCertificate<PrepareVoteMarker> |
+| `borsh/consensus/prepare_vote.bin` | `consensus::PrepareVote` | 29 | SignedByValidator<(ConsensusProposalHash, PrepareVoteMarker)> |
+| `borsh/consensus/ticket_commit_qc.bin` | `consensus::Ticket` | 38 | Ticket::CommitQC(commit_qc) |
+| `borsh/consensus/ticket_genesis.bin` | `consensus::Ticket` | 1 | Ticket::Genesis (single byte tag) |
+| `borsh/consensus/timeout_qc.bin` | `consensus::TimeoutQC` | 37 | TimeoutQC = QuorumCertificate<ConsensusTimeoutMarker> |
 | `borsh/crypto/bls_min_pk_dst.bin` | `&[u8]` | 43 | BLS12-381 min_pk DST string used by hyli-crypto::sign_msg |
 | `borsh/crypto/signable_node_connection_data.bin` | `NodeConnectionData` | 77 | Signable bytes for SignedByValidator<NodeConnectionData> = borsh(msg) |
 | `borsh/crypto/signable_validator_candidacy.bin` | `ValidatorCandidacy` | 18 | Signable bytes for SignedByValidator<ValidatorCandidacy> = borsh(msg) |
