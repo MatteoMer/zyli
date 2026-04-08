@@ -3,7 +3,16 @@
     .version = "0.0.0",
     .fingerprint = 0x83c0316cd7e05a90,
     .minimum_zig_version = "0.15.0",
-    .dependencies = .{},
+    .dependencies = .{
+        // zolt-arith lives next to zyli on disk and is consumed via path
+        // until it gets its own remote release. The implementation plan
+        // calls for this layout explicitly so the BLS12-381 surface that
+        // Zyli depends on for validator verification is owned by a
+        // reusable, narrowly-scoped substrate package.
+        .zolt_arith = .{
+            .path = "../zolt-arith",
+        },
+    },
     .paths = .{
         "build.zig",
         "build.zig.zon",

@@ -4,6 +4,15 @@ pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
 
+    // The arithmetic and crypto substrate Zyli depends on. Pulled in
+    // through `dependencies.zolt_arith` in build.zig.zon — Phase 1 of
+    // the implementation plan.
+    const zolt_arith_dep = b.dependency("zolt_arith", .{
+        .target = target,
+        .optimize = optimize,
+    });
+    const zolt_arith_module = zolt_arith_dep.module("zolt_arith");
+
     // Public zyli library module. Subsystems (model, crypto, wire, ...) are
     // re-exported through src/root.zig so downstream consumers and the node
     // executable share a single import surface.
@@ -11,6 +20,9 @@ pub fn build(b: *std.Build) void {
         .root_source_file = b.path("src/root.zig"),
         .target = target,
         .optimize = optimize,
+        .imports = &.{
+            .{ .name = "zolt_arith", .module = zolt_arith_module },
+        },
     });
 
     const lib = b.addLibrary(.{
@@ -51,14 +63,15 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     });
 
-    // Library unit tests. The test module re-imports `corpus` so any test
-    // file in `src/` can `@import("corpus")`.
+    // Library unit tests. The test module re-imports `corpus` and
+    // `zolt_arith` so any test file in `src/` can `@import` them.
     const test_module = b.createModule(.{
         .root_source_file = b.path("src/root.zig"),
         .target = target,
         .optimize = optimize,
         .imports = &.{
             .{ .name = "corpus", .module = corpus_module },
+            .{ .name = "zolt_arith", .module = zolt_arith_module },
         },
     });
     const lib_unit_tests = b.addTest(.{ .root_module = test_module });

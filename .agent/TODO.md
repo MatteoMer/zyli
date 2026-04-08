@@ -8,7 +8,10 @@ handshake, the replay path, the full consensus message family
 the SignedBlock shape, a stream-driven frame reader, and a typed
 P2PTcpMessage decoder. The executable's `observe HOST:PORT` subcommand
 prints actual ConsensusNetMessage variant labels for Data frames.
-**167 tests passing. 127 fixtures.**
+Phase 1 of the implementation plan is in progress: `zolt-arith` exists
+as a sibling package at `../zolt-arith` with `bigint` already in place,
+and Zyli depends on it via `build.zig.zon`.
+**171 tests passing in zyli, 14 in zolt-arith (185 total). 127 fixtures.**
 
 - `build.zig` / `build.zig.zon` set up; library + executable build cleanly.
 - Borsh codec in `src/model/borsh.zig` covers primitives, options, slices,
@@ -101,6 +104,19 @@ prints actual ConsensusNetMessage variant labels for Data frames.
   truncated frame deallocates everything together. `messageLabel(Data,
   value)` mirrors the upstream `IntoStaticStr` projection on
   `ConsensusNetMessage` and `MempoolNetMessage`.
+- `../zolt-arith` exists as a standalone Zig package with its own
+  `build.zig`, `build.zig.zon`, and a `bigint` module covering
+  fixed-width little-endian limb arithmetic over `[N]u64` (add, sub,
+  cmp, isZero/isOne, bitLen, fromBytesLe/Be, toBytesLe/Be) for both
+  4-limb (BN254-width) and 6-limb (BLS12-381-width) operands. Zyli
+  imports it via path dependency in `build.zig.zon` and re-exports it
+  through `src/crypto/zolt_arith.zig`. `src/crypto/zolt_arith_adapter.zig`
+  is the seam where Hyli wire bytes (compressed BLS12-381 G1 / G2 byte
+  strings) get converted into the limb representation `zolt_arith`
+  consumes — kept in zyli so the substrate stays Hyli-agnostic. Each
+  package owns its own test step: `zig build test` in zyli runs 171
+  tests, in `../zolt-arith` runs 14, and the test runner does NOT
+  propagate across module boundaries on Zig 0.15.
 - `src/crypto/signable.zig` pins the BLS DST string used by
   `hyli-crypto::sign_msg` and exposes `signableBytesAlloc(Msg, msg)` —
   the "what bytes get BLS-signed" rule (`borsh::to_vec(&msg)` for any
@@ -110,19 +126,20 @@ prints actual ConsensusNetMessage variant labels for Data frames.
 
 ## Immediate
 
-- Begin extracting reusable arithmetic from `../zolt` into `zolt-arith`
-  (`bigint`, `field`, `ec`, `msm`, `pairing`, `thread_pool`). This is
-  Phase 1 of the implementation plan and unblocks BLS12-381. The
-  existing `../zolt/src/field`, `../zolt/src/field/pairing.zig`, and
-  `../zolt/src/msm` modules already cover most of the required
-  surface — the work is identifying the durable subset and giving it
-  its own package boundary.
-- Add BLS12-381 field, curve, pairing, and aggregation support to
-  `zolt-arith`, with vectors borrowed from Rust Hyli / `blst`. Phase 2.
-- Implement signed message header verification (BLS12-381 verify on
-  `signable.zig`'s output) once `zolt-arith` BLS lands. The signable
-  payload contract is already pinned and the DST constant lives in
-  `src/crypto/signable.zig`.
+- Add `field.zig` to `zolt-arith`: comptime-generic Montgomery field
+  parameterised by limb count, with multiplication via CIOS and
+  inversion via Fermat. The 6-limb case is the BLS12-381 base field
+  (Fp); the 4-limb case can later host BN254 if `../zolt` ever
+  consumes the new package.
+- Add the BLS12-381 Fp constants (modulus, R, R^2, -p^-1 mod 2^64) to
+  `zolt-arith` and instantiate `Fp` over them.
+- Add `Fp2` (quadratic extension) on top of `Fp`.
+- Add G1 / G2 short Weierstrass curve arithmetic (affine + projective).
+- Add the optimal Ate pairing for BLS12-381.
+- Add hash-to-curve (RFC 9380, suite
+  `BLS12381G2_XMD:SHA-256_SSWU_RO_`) so we can verify signatures.
+- Wire BLS verification into `src/crypto/zolt_arith_adapter.zig` and
+  hook it into a verifier in `src/crypto/`.
 - Teach the observer to issue a real `Handshake::Hello` once BLS
   signing exists — the message shapes and signable bytes are already
   pinned, only the BLS surface is missing.
