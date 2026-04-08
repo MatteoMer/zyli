@@ -16,7 +16,7 @@
 - BLS sign (`signWithScalar`, `signBytes`, `derivePublicKeyFromScalar`)
 - Pairing bilinearity validated against e(2P,Q) = e(P,Q)^2 etc.
 
-Zyli (324 tests, 166 fixtures) has:
+Zyli (326 tests, 166 fixtures) has:
 - Borsh codec, protocol model types, exact hash functions
 - Wire layer: framing, TCP message parsing, handshake types, DA wire protocol
 - Message encoding: `encodeP2PTcpMessage`, `encodeConsensusData` (sending side)
@@ -24,31 +24,31 @@ Zyli (324 tests, 166 fixtures) has:
 - Consensus follower state machine with gap detection + SyncRequest trigger
 - BLS signature verification for all message types (QCs, TCs, SignedBlocks)
 - Hello handshake builder with BLS signing
-- DA sync client with ChainValidator, Follower integration, block store persistence
+- DA sync client with ChainValidator, Follower, block store persistence + resume
 - Storage subsystem: append-only block store with slot→offset index + allSlots
 - State subsystem: ReplayState tracks contract registry, tx counts, staking actions
-- Integration tests: 10-block chain pipeline through validator/follower/store
+- Integration tests: full pipeline through validator/follower/store + replay
 - Subcommands: `observe`, `record`, `replay`, `da-sync`, `replay-store`
 - `observe` sends SyncRequests when follower detects gaps
 - Cross-implementation BLS test vectors verified against Rust blst
 - 153 borsh/wire/hash/crypto fixtures from `compat/fixture-gen`
 
-**543 tests total (324 zyli + 219 zolt-arith).**
+**545 tests total (326 zyli + 219 zolt-arith).**
 
 ## This Session's Deliverables
 
 1. ✅ handleSignedBlock in Follower for DA block ingestion (4 tests)
 2. ✅ ChainValidator: height monotonicity + parent hash chain continuity (7 tests)
 3. ✅ Follower + ChainValidator wired into syncAndReport
-4. ✅ BlockStore: append-only signed block persistence with index rebuild (7 tests)
+4. ✅ BlockStore: append-only signed block persistence with index rebuild (8 tests)
 5. ✅ Block store integrated into DA sync with resume support (`--store`)
 6. ✅ encodeP2PTcpMessage + encodeConsensusData for sending messages (3 tests)
 7. ✅ Gap detection in Follower with gap_detected event (2 tests)
 8. ✅ SyncRequest sending on consensus channel when gaps detected
 9. ✅ replay-store subcommand for offline block chain verification
 10. ✅ Integration tests: full pipeline through chain/follower/store (5 tests)
-11. ✅ State replay engine (ReplayState) tracking contracts/txs/staking (4 tests)
-12. ✅ ReplayState wired into replay-store subcommand
+11. ✅ State replay engine (ReplayState) with contract registration (6 tests)
+12. ✅ ReplayState wired into both da-sync and replay-store subcommands
 
 ## Remaining Phase 5
 
@@ -58,7 +58,8 @@ Zyli (324 tests, 166 fixtures) has:
 
 ## Phase 6 (in progress)
 
-- ✓ ReplayState foundation (contract registry, tx counting)
+- ✓ ReplayState foundation (contract registry, tx counting, staking)
+- ✓ Blob transaction and verified proof processing with OnchainEffect
 - Proper unsettled blob transaction tracking (match blobs to proofs)
 - State commitment tracking per contract (initial_state → next_state)
 - Native verifier support for BLS, SHA3-256, secp256k1
