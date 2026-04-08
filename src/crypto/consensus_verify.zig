@@ -197,6 +197,29 @@ pub fn verifyCommit(
     );
 }
 
+/// Verify a `SignedBlock`'s certificate. The certificate is the
+/// CommitQC over the block's `consensus_proposal`, so verification
+/// is the same shape as `verifyCommit` but applied to a block-shaped
+/// envelope from the DA stream rather than a Commit message from the
+/// consensus stream.
+///
+/// Computes the cph from the consensus_proposal first, then re-builds
+/// the `(cph, ConfirmAck)` payload that the certificate's signers
+/// signed and dispatches into the aggregate verifier.
+pub fn verifySignedBlockCertificate(
+    allocator: std.mem.Allocator,
+    block: types.SignedBlock,
+) Error!bool {
+    const cph_digest = hash.consensusProposalHashed(&block.consensus_proposal);
+    const cph: types.ConsensusProposalHash = .{ .bytes = &cph_digest };
+    return verifyQuorumCertificate(
+        allocator,
+        .{ .aggregate = block.certificate, .marker = .confirm_ack },
+        cph,
+        .confirm_ack,
+    );
+}
+
 // ---------------------------------------------------------------------------
 // Top-level dispatch for ConsensusNetMessage
 // ---------------------------------------------------------------------------
@@ -511,6 +534,110 @@ test "verifyCommit: round-trip with CommitQC from two signers" {
     try testing.expect(ok);
 }
 
+test "verifySignedBlockCertificate: round-trip with single-signer certificate" {
+    // Build a tiny SignedBlock, derive the cph from its proposal, sign
+    // the (cph, ConfirmAck) payload, wrap as a CommitQC-shaped
+    // certificate, and verify it through verifySignedBlockCertificate.
+    const proposal: types.ConsensusProposal = .{
+        .slot = 1,
+        .parent_hash = .{ .bytes = "parent-block" },
+        .cut = &[_]types.CutEntry{},
+        .staking_actions = &[_]types.ConsensusStakingAction{},
+        .timestamp = .{ .millis = 1_700_000_000_000 },
+    };
+
+    const cph_digest = @import("../model/hash.zig").consensusProposalHashed(&proposal);
+    const cph: types.ConsensusProposalHash = .{ .bytes = &cph_digest };
+    const vote_payload: types.ConsensusVotePayload = .{
+        .consensus_proposal_hash = cph,
+        .marker = .confirm_ack,
+    };
+    const msg_bytes = try signable.signableBytesAlloc(
+        testing.allocator,
+        types.ConsensusVotePayload,
+        vote_payload,
+    );
+    defer testing.allocator.free(msg_bytes);
+
+    const sk_limbs: [4]u64 = .{ 41, 0, 0, 0 };
+    const pk = bls12_381.g1Generator().mul(4, sk_limbs);
+    const h_msg = try hash_to_curve_g2.hashToG2(msg_bytes, bls.DST);
+    const sig = h_msg.mul(4, sk_limbs);
+
+    const pk_bytes = bls12_381.encodeG1Compressed(pk);
+    const sig_bytes = bls12_381.encodeG2Compressed(sig);
+
+    const validators = [_]types.ValidatorPublicKey{.{ .bytes = &pk_bytes }};
+    const block: types.SignedBlock = .{
+        .data_proposals = &[_]types.LaneDataProposals{},
+        .consensus_proposal = proposal,
+        .certificate = .{
+            .signature = .{ .bytes = &sig_bytes },
+            .validators = &validators,
+        },
+    };
+
+    const ok = try verifySignedBlockCertificate(testing.allocator, block);
+    try testing.expect(ok);
+}
+
+test "verifySignedBlockCertificate: rejects when proposal is tampered" {
+    // Same setup as the round-trip test, but bump the timestamp on the
+    // proposal AFTER the certificate was generated. The cph will no
+    // longer match what was signed, so the aggregate verifier rejects.
+    const proposal_signed: types.ConsensusProposal = .{
+        .slot = 1,
+        .parent_hash = .{ .bytes = "parent-block" },
+        .cut = &[_]types.CutEntry{},
+        .staking_actions = &[_]types.ConsensusStakingAction{},
+        .timestamp = .{ .millis = 1_700_000_000_000 },
+    };
+
+    const cph_signed = @import("../model/hash.zig").consensusProposalHashed(&proposal_signed);
+    const cph: types.ConsensusProposalHash = .{ .bytes = &cph_signed };
+    const vote_payload: types.ConsensusVotePayload = .{
+        .consensus_proposal_hash = cph,
+        .marker = .confirm_ack,
+    };
+    const msg_bytes = try signable.signableBytesAlloc(
+        testing.allocator,
+        types.ConsensusVotePayload,
+        vote_payload,
+    );
+    defer testing.allocator.free(msg_bytes);
+
+    const sk_limbs: [4]u64 = .{ 43, 0, 0, 0 };
+    const pk = bls12_381.g1Generator().mul(4, sk_limbs);
+    const h_msg = try hash_to_curve_g2.hashToG2(msg_bytes, bls.DST);
+    const sig = h_msg.mul(4, sk_limbs);
+
+    const pk_bytes = bls12_381.encodeG1Compressed(pk);
+    const sig_bytes = bls12_381.encodeG2Compressed(sig);
+
+    // The block carries a *different* proposal than the one that was
+    // signed (different timestamp).
+    const proposal_tampered: types.ConsensusProposal = .{
+        .slot = 1,
+        .parent_hash = .{ .bytes = "parent-block" },
+        .cut = &[_]types.CutEntry{},
+        .staking_actions = &[_]types.ConsensusStakingAction{},
+        .timestamp = .{ .millis = 1_700_000_000_001 },
+    };
+
+    const validators = [_]types.ValidatorPublicKey{.{ .bytes = &pk_bytes }};
+    const block: types.SignedBlock = .{
+        .data_proposals = &[_]types.LaneDataProposals{},
+        .consensus_proposal = proposal_tampered,
+        .certificate = .{
+            .signature = .{ .bytes = &sig_bytes },
+            .validators = &validators,
+        },
+    };
+
+    const ok = try verifySignedBlockCertificate(testing.allocator, block);
+    try testing.expect(!ok);
+}
+
 test "verifyConsensusMessage: dispatches to the right verifier per variant" {
     // A round-tripped PrepareVote should verify when wrapped in a
     // ConsensusNetMessage and routed through the top-level dispatcher.
@@ -744,4 +871,112 @@ test "verifyTimeoutCertificate: rejects when inner PrepareQC is forged" {
 
     const result = try verifyTimeoutCertificate(testing.allocator, tc);
     try testing.expect(!result); // must reject: inner PrepareQC is forged
+}
+
+test "verifySignedBlockCertificate: round-trip with two-signer CommitQC" {
+    const proposal: types.ConsensusProposal = .{
+        .slot = 10,
+        .parent_hash = .{ .bytes = "block-parent" },
+        .cut = &[_]types.CutEntry{},
+        .staking_actions = &[_]types.ConsensusStakingAction{},
+        .timestamp = .{ .millis = 77_000 },
+    };
+
+    const cph_digest = hash.consensusProposalHashed(&proposal);
+    const cph: types.ConsensusProposalHash = .{ .bytes = &cph_digest };
+    const ack_payload: types.ConsensusVotePayload = .{
+        .consensus_proposal_hash = cph,
+        .marker = .confirm_ack,
+    };
+    const msg_bytes = try signable.signableBytesAlloc(
+        testing.allocator,
+        types.ConsensusVotePayload,
+        ack_payload,
+    );
+    defer testing.allocator.free(msg_bytes);
+
+    const sk1_limbs: [4]u64 = .{ 53, 0, 0, 0 };
+    const sk2_limbs: [4]u64 = .{ 59, 0, 0, 0 };
+    const pk1 = bls12_381.g1Generator().mul(4, sk1_limbs);
+    const pk2 = bls12_381.g1Generator().mul(4, sk2_limbs);
+    const h_msg = try hash_to_curve_g2.hashToG2(msg_bytes, bls.DST);
+    const sig1 = h_msg.mul(4, sk1_limbs);
+    const sig2 = h_msg.mul(4, sk2_limbs);
+    const agg_sig = sig1.add(sig2);
+
+    const pk1_bytes = bls12_381.encodeG1Compressed(pk1);
+    const pk2_bytes = bls12_381.encodeG1Compressed(pk2);
+    const agg_sig_bytes = bls12_381.encodeG2Compressed(agg_sig);
+
+    const validators = [_]types.ValidatorPublicKey{
+        .{ .bytes = &pk1_bytes },
+        .{ .bytes = &pk2_bytes },
+    };
+
+    const block: types.SignedBlock = .{
+        .data_proposals = &[_]types.LaneDataProposals{},
+        .consensus_proposal = proposal,
+        .certificate = .{
+            .signature = .{ .bytes = &agg_sig_bytes },
+            .validators = &validators,
+        },
+    };
+
+    const ok = try verifySignedBlockCertificate(testing.allocator, block);
+    try testing.expect(ok);
+}
+
+test "verifySignedBlockCertificate: rejects forged certificate" {
+    const proposal: types.ConsensusProposal = .{
+        .slot = 10,
+        .parent_hash = .{ .bytes = "block-parent" },
+        .cut = &[_]types.CutEntry{},
+        .staking_actions = &[_]types.ConsensusStakingAction{},
+        .timestamp = .{ .millis = 77_000 },
+    };
+
+    // Sign with a different proposal (wrong cph).
+    const wrong_proposal: types.ConsensusProposal = .{
+        .slot = 11,
+        .parent_hash = .{ .bytes = "block-parent" },
+        .cut = &[_]types.CutEntry{},
+        .staking_actions = &[_]types.ConsensusStakingAction{},
+        .timestamp = .{ .millis = 77_000 },
+    };
+    const wrong_cph_digest = hash.consensusProposalHashed(&wrong_proposal);
+    const wrong_cph: types.ConsensusProposalHash = .{ .bytes = &wrong_cph_digest };
+    const ack_payload: types.ConsensusVotePayload = .{
+        .consensus_proposal_hash = wrong_cph,
+        .marker = .confirm_ack,
+    };
+    const msg_bytes = try signable.signableBytesAlloc(
+        testing.allocator,
+        types.ConsensusVotePayload,
+        ack_payload,
+    );
+    defer testing.allocator.free(msg_bytes);
+
+    const sk1_limbs: [4]u64 = .{ 61, 0, 0, 0 };
+    const pk1 = bls12_381.g1Generator().mul(4, sk1_limbs);
+    const h_msg = try hash_to_curve_g2.hashToG2(msg_bytes, bls.DST);
+    const sig1 = h_msg.mul(4, sk1_limbs);
+
+    const pk1_bytes = bls12_381.encodeG1Compressed(pk1);
+    const sig_bytes = bls12_381.encodeG2Compressed(sig1);
+
+    const validators = [_]types.ValidatorPublicKey{
+        .{ .bytes = &pk1_bytes },
+    };
+
+    const block: types.SignedBlock = .{
+        .data_proposals = &[_]types.LaneDataProposals{},
+        .consensus_proposal = proposal, // mismatches what was signed
+        .certificate = .{
+            .signature = .{ .bytes = &sig_bytes },
+            .validators = &validators,
+        },
+    };
+
+    const ok = try verifySignedBlockCertificate(testing.allocator, block);
+    try testing.expect(!ok);
 }
