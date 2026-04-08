@@ -22,6 +22,7 @@ const types = @import("../model/types.zig");
 const framing_mod = @import("../wire/framing.zig");
 const da_wire = @import("../wire/da.zig");
 const tcp_message = @import("../wire/tcp_message.zig");
+const consensus_verify = @import("../crypto/consensus_verify.zig");
 
 /// What the caller gets back for each successfully-decoded event.
 pub const SyncEvent = union(enum) {
@@ -158,8 +159,9 @@ pub fn syncFromHeight(
     }
 }
 
-/// Simpler interface: sync blocks and just count them, printing a
-/// summary to the given writer. Useful for the `da-sync` subcommand.
+/// Connect to a DA server, stream blocks, verify their BLS certificates,
+/// and print a one-line summary per block. This is the entry point for the
+/// `da-sync` subcommand.
 pub fn syncAndReport(
     allocator: std.mem.Allocator,
     stdout: anytype,
@@ -169,27 +171,115 @@ pub fn syncAndReport(
     try stdout.print("da-sync: connecting to {s}, starting from height {d}\n", .{ da_address, start_height });
     try stdout.flush();
 
-    const result = syncFromHeight(
-        allocator,
-        da_address,
-        .{ .height = start_height },
-        &reportBlock,
-    ) catch |err| {
-        try stdout.print("da-sync: failed: {s}\n", .{@errorName(err)});
+    // Parse address.
+    const sep = std.mem.lastIndexOfScalar(u8, da_address, ':') orelse {
+        try stdout.print("da-sync: address must be host:port\n", .{});
+        return;
+    };
+    const host = da_address[0..sep];
+    const port_str = da_address[sep + 1 ..];
+    const port = std.fmt.parseUnsigned(u16, port_str, 10) catch {
+        try stdout.print("da-sync: invalid port\n", .{});
+        return;
+    };
+    const address = std.net.Address.parseIp(host, port) catch {
+        try stdout.print("da-sync: invalid address\n", .{});
         return;
     };
 
-    try stdout.print("da-sync: done — {d} blocks, {d} not-found, {d} pings, termination={s}\n", .{
-        result.blocks_received,
-        result.not_found,
-        result.pings,
-        @tagName(result.termination),
-    });
-}
+    var stream = std.net.tcpConnectToAddress(address) catch {
+        try stdout.print("da-sync: connection failed\n", .{});
+        return;
+    };
+    defer stream.close();
 
-fn reportBlock(_: types.SignedBlock, _: types.BlockHeight) bool {
-    // Accept all blocks.
-    return true;
+    // Send StreamFromHeight request.
+    const request_frame = da_wire.encodeRequestFrameAlloc(allocator, .{
+        .stream_from_height = .{ .height = start_height },
+    }) catch {
+        try stdout.print("da-sync: failed to encode request\n", .{});
+        return;
+    };
+    defer allocator.free(request_frame);
+    stream.writeAll(request_frame) catch {
+        try stdout.print("da-sync: failed to send request\n", .{});
+        return;
+    };
+
+    try stdout.print("da-sync: request sent, reading blocks…\n", .{});
+    try stdout.flush();
+
+    // Read frames.
+    const StreamReader = struct {
+        inner: std.net.Stream,
+        pub fn read(self: *@This(), buf: []u8) !usize {
+            return self.inner.read(buf);
+        }
+    };
+    var stream_reader: StreamReader = .{ .inner = stream };
+    var frames = framing_mod.StreamFrameReader(*StreamReader).init(allocator);
+    defer frames.deinit();
+
+    var blocks: usize = 0;
+    var verified: usize = 0;
+    var not_found: usize = 0;
+
+    while (true) {
+        const maybe_frame = frames.nextFrame(&stream_reader) catch {
+            try stdout.print("da-sync: read error after {d} blocks\n", .{blocks});
+            break;
+        };
+        const frame = maybe_frame orelse {
+            try stdout.print("da-sync: server closed after {d} blocks\n", .{blocks});
+            break;
+        };
+
+        // PING echo.
+        if (tcp_message.classifyFrame(frame) == .ping) {
+            const ping_framed = framing_mod.encodeFrameAlloc(allocator, tcp_message.ping_magic) catch continue;
+            defer allocator.free(ping_framed);
+            stream.writeAll(ping_framed) catch {};
+            continue;
+        }
+
+        // Decode DA event.
+        var decoded = da_wire.decodeEventFrame(allocator, frame) catch {
+            try stdout.print("da-sync: decode error, skipping frame\n", .{});
+            continue;
+        };
+        defer decoded.deinit();
+
+        switch (decoded.value) {
+            .signed_block => |block| {
+                blocks += 1;
+                const slot = block.consensus_proposal.slot;
+                const n_lanes = block.data_proposals.len;
+                const n_validators = block.certificate.validators.len;
+
+                // Verify the block's CommitQC certificate.
+                const bls_ok = consensus_verify.verifySignedBlockCertificate(
+                    allocator,
+                    block,
+                ) catch false;
+                if (bls_ok) verified += 1;
+                const label: []const u8 = if (bls_ok) "ok" else "BAD";
+
+                try stdout.print("block {d}: slot={d} lanes={d} validators={d} [bls={s}]\n", .{
+                    blocks, slot, n_lanes, n_validators, label,
+                });
+                try stdout.flush();
+            },
+            .block_not_found => |h| {
+                not_found += 1;
+                try stdout.print("da-sync: block not found at height {d}\n", .{h.height});
+            },
+            .mempool_status_event => {},
+        }
+    }
+
+    try stdout.print("da-sync: done — {d} blocks ({d} verified), {d} not-found\n", .{
+        blocks, verified, not_found,
+    });
 }
 
 // ---------------------------------------------------------------------------
