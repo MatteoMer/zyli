@@ -1624,13 +1624,21 @@ fn main() {
     }
 
     // Variant 0: Prepare(ConsensusProposal, Ticket, View). We reuse the
-    // populated cp_full and the Genesis ticket so the byte content is
-    // deterministic.
-    let prepare_msg = ConsensusNetMessageLocal::Prepare(cp_full.clone(), TicketLocal::Genesis, 7);
+    // populated cp_full (slot 7) with a CommitQC ticket — Genesis is
+    // structurally invalid for slot ≠ 1, so the structural validator
+    // would reject the message at observation time.
+    let prepare_msg = ConsensusNetMessageLocal::Prepare(
+        cp_full.clone(),
+        TicketLocal::CommitQC(QuorumCertificateLocal(
+            qc_agg.clone(),
+            ConsensusMarkerSerdeLocal::ConfirmAck,
+        )),
+        7,
+    );
     gen.write_borsh(
         "consensus/net_message_prepare",
         "consensus::ConsensusNetMessage",
-        "ConsensusNetMessage::Prepare(cp_full, Ticket::Genesis, view=7)",
+        "ConsensusNetMessage::Prepare(cp_full, Ticket::CommitQC(commit_qc), view=7)",
         &prepare_msg,
     );
 

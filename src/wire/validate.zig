@@ -39,37 +39,63 @@ pub fn isNilQC(qc: types.QuorumCertificate) bool {
     return qc.marker == .nil_consensus_timeout;
 }
 
+/// A non-empty `AggregateSignature.validators` list is a structural
+/// requirement for any QC: a QC over zero validators trivially
+/// "passes" any threshold and would be a byzantine attempt to skip
+/// the consensus check.
+pub fn isNonEmptyAggregate(agg: types.AggregateSignature) bool {
+    return agg.validators.len > 0;
+}
+
 /// Validate a decoded `ConsensusNetMessage` for structural
 /// self-consistency. Returns `true` if every per-variant invariant
 /// holds.
 ///
 /// Specifically:
 ///   - `Prepare`: the inner ticket is one of the legal kinds (no
-///     forced-commit-qc on the wire from peers).
+///     forced-commit-qc on the wire from peers); the slot must be ≥ 1
+///     (slot 0 doesn't exist); a Genesis ticket implies slot == 1.
 ///   - `PrepareVote`: inner Signed payload's marker is `prepare_vote`.
-///   - `Confirm`: inner QC is a `PrepareQC` (marker = prepare_vote).
+///   - `Confirm`: inner QC is a `PrepareQC` (marker = prepare_vote)
+///     with at least one validator.
 ///   - `ConfirmAck`: inner Signed payload's marker is `confirm_ack`.
-///   - `Commit`: inner QC is a `CommitQC` (marker = confirm_ack).
+///   - `Commit`: inner QC is a `CommitQC` (marker = confirm_ack) with
+///     at least one validator.
 ///   - `Timeout`: outer signed payload's marker is `consensus_timeout`,
 ///     and the kind's nested signed payload (if NilProposal) carries
 ///     `nil_consensus_timeout`.
-///   - `TimeoutCertificate`: outer QC is a `TimeoutQC`, and the
-///     `TCKind` payload uses the matching marker variants.
+///   - `TimeoutCertificate`: outer QC is a `TimeoutQC` with at least
+///     one validator, and the `TCKind` payload uses the matching marker
+///     variants.
 ///   - `ValidatorCandidacy`, `SyncRequest`, `SyncReply`: no QC
 ///     invariants — the borsh decoder already enforced the structure.
 pub fn validateConsensusMessage(msg: types.ConsensusNetMessage) bool {
     return switch (msg) {
-        .prepare => |p| validateTicket(p.ticket, .from_peer),
+        .prepare => |p| validatePrepare(p),
         .prepare_vote => |pv| pv.msg.marker == .prepare_vote,
-        .confirm => |c| isPrepareQC(c.prepare_qc),
+        .confirm => |c| isPrepareQC(c.prepare_qc) and isNonEmptyAggregate(c.prepare_qc.aggregate),
         .confirm_ack => |ca| ca.msg.marker == .confirm_ack,
-        .commit => |c| isCommitQC(c.commit_qc),
+        .commit => |c| isCommitQC(c.commit_qc) and isNonEmptyAggregate(c.commit_qc.aggregate),
         .timeout => |t| validateTimeout(t),
-        .timeout_certificate => |tc| validateTimeoutCertificate(tc),
+        .timeout_certificate => |tc| validateTimeoutCertificate(tc) and
+            isNonEmptyAggregate(tc.timeout_qc.aggregate),
         .validator_candidacy => true,
         .sync_request => true,
         .sync_reply => |sr| validateTicket(sr.ticket, .from_peer),
     };
+}
+
+/// Cross-check the Prepare's ticket against its proposal slot. Mirrors
+/// the upstream check from
+/// hyli/src/consensus/role_follower.rs ("Genesis ticket is only valid
+/// for the first slot").
+pub fn validatePrepare(p: types.PreparePayload) bool {
+    if (p.proposal.slot == 0) return false;
+    switch (p.ticket) {
+        .genesis => if (p.proposal.slot != 1) return false,
+        else => {},
+    }
+    return validateTicket(p.ticket, .from_peer);
 }
 
 /// Tickets accepted on the wire from a peer. The internal
@@ -316,7 +342,9 @@ test "validateConsensusMessage: Prepare with ForcedCommitQC ticket fails (peer s
     try testing.expect(!validateConsensusMessage(msg));
 }
 
-test "validateConsensusMessage: Prepare with Genesis ticket succeeds" {
+test "validateConsensusMessage: Prepare with Genesis ticket succeeds at slot=1" {
+    // sampleProposal() returns a proposal with slot=1, which is the
+    // only slot a Genesis ticket is legal for.
     const msg: types.ConsensusNetMessage = .{
         .prepare = .{
             .proposal = sampleProposal(),
@@ -325,6 +353,60 @@ test "validateConsensusMessage: Prepare with Genesis ticket succeeds" {
         },
     };
     try testing.expect(validateConsensusMessage(msg));
+}
+
+test "validateConsensusMessage: Prepare with Genesis ticket at slot=2 fails" {
+    var p = sampleProposal();
+    p.slot = 2;
+    const msg: types.ConsensusNetMessage = .{
+        .prepare = .{
+            .proposal = p,
+            .ticket = .genesis,
+            .view = 0,
+        },
+    };
+    try testing.expect(!validateConsensusMessage(msg));
+}
+
+test "validateConsensusMessage: Prepare with slot=0 fails" {
+    var p = sampleProposal();
+    p.slot = 0;
+    const msg: types.ConsensusNetMessage = .{
+        .prepare = .{
+            .proposal = p,
+            .ticket = .genesis,
+            .view = 0,
+        },
+    };
+    try testing.expect(!validateConsensusMessage(msg));
+}
+
+test "validateConsensusMessage: Confirm with empty validators QC fails" {
+    const empty_qc: types.AggregateSignature = .{
+        .signature = .{ .bytes = &[_]u8{0xee} ** 12 },
+        .validators = &[_]types.ValidatorPublicKey{},
+    };
+    const msg: types.ConsensusNetMessage = .{
+        .confirm = .{
+            .prepare_qc = .{ .aggregate = empty_qc, .marker = .prepare_vote },
+            .consensus_proposal_hash = .{ .bytes = "cp" },
+        },
+    };
+    try testing.expect(!validateConsensusMessage(msg));
+}
+
+test "validateConsensusMessage: Commit with empty validators QC fails" {
+    const empty_qc: types.AggregateSignature = .{
+        .signature = .{ .bytes = &[_]u8{0xee} ** 12 },
+        .validators = &[_]types.ValidatorPublicKey{},
+    };
+    const msg: types.ConsensusNetMessage = .{
+        .commit = .{
+            .commit_qc = .{ .aggregate = empty_qc, .marker = .confirm_ack },
+            .consensus_proposal_hash = .{ .bytes = "cp" },
+        },
+    };
+    try testing.expect(!validateConsensusMessage(msg));
 }
 
 test "validateConsensusMessage: SyncRequest is always valid" {

@@ -537,12 +537,12 @@ test "formatMessage: ConsensusNetMessage::Prepare prints slot/view" {
     defer decoded.deinit();
     var out = try formatToList(testing.allocator, types.ConsensusNetMessage, decoded.value);
     defer out.deinit(testing.allocator);
-    // The fixture's cp_full has slot=7 and we set view=7 in the
-    // fixture-gen, so the output should mention both.
+    // The fixture's cp_full has slot=7, view=7, and now uses a
+    // CommitQC ticket (Genesis would be invalid for slot ≠ 1).
     try testing.expect(std.mem.indexOf(u8, out.items, "Prepare") != null);
     try testing.expect(std.mem.indexOf(u8, out.items, "slot=7") != null);
     try testing.expect(std.mem.indexOf(u8, out.items, "view=7") != null);
-    try testing.expect(std.mem.indexOf(u8, out.items, "Genesis") != null);
+    try testing.expect(std.mem.indexOf(u8, out.items, "CommitQC") != null);
 }
 
 test "formatMessage: PrepareVote prints cph hex" {

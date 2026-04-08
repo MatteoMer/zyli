@@ -918,10 +918,16 @@ fn sampleConsensusProposalEmpty() types.ConsensusProposal {
 }
 
 test "fixture: ConsensusNetMessage::Prepare" {
+    // The Prepare fixture now carries a CommitQC ticket so it stays
+    // structurally valid for slot=7 (Genesis would only be legal at
+    // slot=1).
     const value: types.ConsensusNetMessage = .{
         .prepare = .{
             .proposal = sampleConsensusProposalFull(),
-            .ticket = .genesis,
+            .ticket = .{ .commit_qc = .{
+                .aggregate = sampleAggregateSignature(),
+                .marker = .confirm_ack,
+            } },
             .view = 7,
         },
     };

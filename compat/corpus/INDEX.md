@@ -16,7 +16,7 @@ Source: `hyli` git revision `e41899eb582d2d25d13a97a425ec76250484d45c`.
 | `borsh/consensus/net_message_commit.bin` | `consensus::ConsensusNetMessage` | 46 | ConsensusNetMessage::Commit(commit_qc, cph) |
 | `borsh/consensus/net_message_confirm.bin` | `consensus::ConsensusNetMessage` | 46 | ConsensusNetMessage::Confirm(prepare_qc, cph) |
 | `borsh/consensus/net_message_confirm_ack.bin` | `consensus::ConsensusNetMessage` | 30 | ConsensusNetMessage::ConfirmAck(confirm_ack) |
-| `borsh/consensus/net_message_prepare.bin` | `consensus::ConsensusNetMessage` | 145 | ConsensusNetMessage::Prepare(cp_full, Ticket::Genesis, view=7) |
+| `borsh/consensus/net_message_prepare.bin` | `consensus::ConsensusNetMessage` | 182 | ConsensusNetMessage::Prepare(cp_full, Ticket::CommitQC(commit_qc), view=7) |
 | `borsh/consensus/net_message_prepare_vote.bin` | `consensus::ConsensusNetMessage` | 30 | ConsensusNetMessage::PrepareVote(prepare_vote) |
 | `borsh/consensus/net_message_sync_reply.bin` | `consensus::ConsensusNetMessage` | 61 | ConsensusNetMessage::SyncReply((sender, cp_empty, Genesis, view=12)) |
 | `borsh/consensus/net_message_sync_request.bin` | `consensus::ConsensusNetMessage` | 9 | ConsensusNetMessage::SyncRequest(cph) |
