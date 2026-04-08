@@ -2,10 +2,12 @@
 
 ## Immediate
 
-- Extract reusable arithmetic and parallelism components from `../zolt` into a dedicated `zolt-arith` package.
+- Collect Hyli compatibility fixtures for Borsh encoding, hashes, signatures, and aggregate signatures.
+- Use `zolt-arith` as the shared arithmetic and cryptography library path for both Zyli and Zolt.
+- Extract reusable arithmetic and parallelism components from `../zolt` into `zolt-arith` without pulling prover-specific modules into its public surface.
 - Define the first stable `zolt-arith` modules: `bigint`, `field`, `ec`, `msm`, `pairing`, `thread_pool`.
 - Add BLS12-381 field, curve, pairing, and aggregation support to `zolt-arith`.
-- Collect Hyli compatibility fixtures for Borsh encoding, hashes, signatures, and aggregate signatures.
+- Keep `zolt-arith` narrow at first and expand it only when Hyli or Zolt needs more arithmetic or crypto surface.
 - Implement Zyli's Borsh codec and protocol type layer.
 - Implement Hyli TCP framing and handshake.
 - Implement signed message header verification.
