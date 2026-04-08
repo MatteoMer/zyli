@@ -98,6 +98,33 @@ pub fn validatePrepare(p: types.PreparePayload) bool {
     return validateTicket(p.ticket, .from_peer);
 }
 
+/// Stateless monotonicity check between two consecutive proposals.
+/// `prev` is the last accepted proposal, `next` is what just arrived.
+/// Returns `true` if the next proposal is a plausible successor —
+/// the slot must strictly increase (or stay the same with a higher
+/// view), and the timestamp must strictly increase. Mirrors the
+/// upstream `verify_timestamp` and the slot/view ordering rules
+/// from `hyli/src/consensus/role_follower.rs`.
+///
+/// `prev_view` is what the follower's BFT round state would have
+/// recorded for `prev` — the caller passes it explicitly so this
+/// remains a pure function.
+pub fn validateProposalSucceeds(
+    prev: types.ConsensusProposal,
+    prev_view: types.View,
+    next: types.ConsensusProposal,
+    next_view: types.View,
+) bool {
+    if (next.slot < prev.slot) return false;
+    if (next.slot == prev.slot and next_view <= prev_view) return false;
+    // Strict timestamp monotonicity. The upstream check has a
+    // configurable upper bound that depends on slot duration; we only
+    // enforce the lower bound here because the upper bound needs
+    // chain-config knowledge the validator doesn't carry yet.
+    if (next.timestamp.millis <= prev.timestamp.millis) return false;
+    return true;
+}
+
 /// Tickets accepted on the wire from a peer. The internal
 /// `ForcedCommitQC` variant is never sent — it exists only as a
 /// runtime hint for the leader. Any peer that emits one is malformed.
@@ -414,6 +441,48 @@ test "validateConsensusMessage: SyncRequest is always valid" {
         .sync_request = .{ .bytes = "cp" },
     };
     try testing.expect(validateConsensusMessage(msg));
+}
+
+test "validateProposalSucceeds: same slot, higher view, newer ts" {
+    const prev = sampleProposal(); // slot=1, ts=0
+    var next = sampleProposal();
+    next.timestamp.millis = 1;
+    try testing.expect(validateProposalSucceeds(prev, 0, next, 1));
+}
+
+test "validateProposalSucceeds: next slot, newer ts" {
+    const prev = sampleProposal(); // slot=1, ts=0
+    var next = sampleProposal();
+    next.slot = 2;
+    next.timestamp.millis = 100;
+    try testing.expect(validateProposalSucceeds(prev, 0, next, 0));
+}
+
+test "validateProposalSucceeds: rewinding the slot fails" {
+    var prev = sampleProposal();
+    prev.slot = 5;
+    prev.timestamp.millis = 100;
+    var next = sampleProposal();
+    next.slot = 4;
+    next.timestamp.millis = 200;
+    try testing.expect(!validateProposalSucceeds(prev, 0, next, 0));
+}
+
+test "validateProposalSucceeds: same slot/view fails" {
+    const prev = sampleProposal();
+    var next = sampleProposal();
+    next.timestamp.millis = 100;
+    // Same slot=1, view=0 → next must bump the view.
+    try testing.expect(!validateProposalSucceeds(prev, 0, next, 0));
+}
+
+test "validateProposalSucceeds: stale timestamp fails" {
+    var prev = sampleProposal();
+    prev.timestamp.millis = 100;
+    var next = sampleProposal();
+    next.slot = 2;
+    next.timestamp.millis = 100; // not strictly greater
+    try testing.expect(!validateProposalSucceeds(prev, 0, next, 0));
 }
 
 test "validateMempoolMessage: stub returns true" {

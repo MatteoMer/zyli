@@ -23,7 +23,7 @@ Still missing for full BLS verification:
 - BLS verify entry point
 - Subgroup membership checks for hostile inputs
 
-**225 tests passing in zyli, 171 in zolt-arith (396 total). 150 fixtures.**
+**228 tests passing in zyli, 171 in zolt-arith (399 total). 153 fixtures.**
 
 - `build.zig` / `build.zig.zon` set up; library + executable build cleanly.
 - Borsh codec in `src/model/borsh.zig` covers primitives, options, slices,
@@ -141,6 +141,15 @@ Still missing for full BLS verification:
   Genesis ticket only valid for slot=1, slot=0 always invalid, and
   Confirm/Commit/TimeoutCertificate aggregate signatures must have
   at least one validator.
+- The executable has a `replay <file>` subcommand that reads framed
+  bytes from disk and runs the same decode + validate + format
+  pipeline as `observe`. Useful for offline analysis of captured
+  testnet traffic.
+- Verifier-worker IPC types are pinned in the corpus: `VerifyRequest`
+  (verifier, proof, program_id, recursive) and `VerifyResponse`
+  (ok, outputs, error) with both success and failure variants.
+  These are the surface a future Zig verifier-worker supervisor
+  will need to drive (Phase 6 of the implementation plan).
 - `src/wire/protocol.zig` exposes a `decodeP2PTcpMessage(allocator,
   Data, frame_bytes)` helper that returns a `Decoded(Data)` value
   backed by an internal arena allocator. The arena shape exists
