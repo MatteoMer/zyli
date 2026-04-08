@@ -53,6 +53,7 @@ pub const borsh = struct {
     pub const model = struct {
         pub const aggregate_signature_2: []const u8 = @embedFile("corpus/borsh/model/aggregate_signature_2.bin");
         pub const blob_index_3: []const u8 = @embedFile("corpus/borsh/model/blob_index_3.bin");
+        pub const blob_proof_output_sample: []const u8 = @embedFile("corpus/borsh/model/blob_proof_output_sample.bin");
         pub const blob_simple: []const u8 = @embedFile("corpus/borsh/model/blob_simple.bin");
         pub const blob_transaction: []const u8 = @embedFile("corpus/borsh/model/blob_transaction.bin");
         pub const blobs_hashes_empty: []const u8 = @embedFile("corpus/borsh/model/blobs_hashes_empty.bin");
@@ -118,6 +119,7 @@ pub const borsh = struct {
 
 pub const hash = struct {
     pub const model = struct {
+        pub const blob_proof_output_sample: []const u8 = @embedFile("corpus/hash/model/blob_proof_output_sample.bin");
         pub const blob_simple: []const u8 = @embedFile("corpus/hash/model/blob_simple.bin");
         pub const blob_transaction: []const u8 = @embedFile("corpus/hash/model/blob_transaction.bin");
         pub const consensus_proposal_empty: []const u8 = @embedFile("corpus/hash/model/consensus_proposal_empty.bin");

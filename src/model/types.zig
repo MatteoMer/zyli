@@ -165,12 +165,14 @@ pub const VerifiedProofTransaction = struct {
     is_recursive: bool,
 };
 
-/// Placeholder for the `BlobProofOutput` type — Hyli definition is in
-/// `verifiers.rs`. Until we need a concrete shape, we accept any byte buffer
-/// so callers can keep the slice empty in fixtures that don't exercise it.
-pub const BlobProofOutput = struct {
-    bytes: []const u8,
-};
+/// `hyli_model::BlobProofOutput` from
+/// `crates/hyli-model/src/node/data_availability.rs`. Field order matches
+/// the Rust definition exactly.
+///
+/// The Zig declaration is forward-referenced from
+/// `VerifiedProofTransaction.proven_blobs`, so the full struct body lives
+/// after `HyliOutput` is defined. See `BlobProofOutputBody` below.
+pub const BlobProofOutput = BlobProofOutputBody;
 
 /// `hyli_model::TransactionData` enum — Borsh discriminants follow the
 /// declaration order: Blob, Proof, VerifiedProof.
@@ -343,6 +345,16 @@ pub const OnchainEffect = union(enum) {
 pub const StateRead = struct {
     contract_name: ContractName,
     state_commitment: StateCommitment,
+};
+
+/// `hyli_model::BlobProofOutput` body — full struct shape. See
+/// `BlobProofOutput` above for the forward-reference glue.
+pub const BlobProofOutputBody = struct {
+    blob_tx_hash: TxHash,
+    original_proof_hash: ProofDataHash,
+    hyli_output: HyliOutput,
+    program_id: ProgramId,
+    verifier: Verifier,
 };
 
 /// `hyli_model::HyliOutput` from contract.rs.

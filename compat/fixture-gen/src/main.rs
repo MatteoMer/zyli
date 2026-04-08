@@ -17,14 +17,14 @@ use std::path::{Path, PathBuf};
 
 use borsh::BorshSerialize;
 use hyli_model::{
-    utils::TimestampMs, AggregateSignature, Blob, BlobData, BlobHash, BlobIndex, BlobTransaction,
-    BlobsHashes, BlockHeight, Calldata, ConsensusProposal, ConsensusProposalHash,
-    ConsensusStakingAction, ContractName, DataProposal, DataProposalHash, DataProposalParent,
-    Hashed, HyliOutput, Identity, IndexedBlobs, LaneBytesSize, LaneId, OnchainEffect, ProgramId,
-    ProofData, ProofDataHash, ProofTransaction, RegisterContractAction, RegisterContractEffect,
-    Signature, Signed, SignedBlock, StateCommitment, TimeoutWindow, Transaction, TransactionData,
-    TxContext, TxHash, ValidatorCandidacy, ValidatorPublicKey, ValidatorSignature, Verifier,
-    VerifiedProofTransaction,
+    utils::TimestampMs, AggregateSignature, Blob, BlobData, BlobHash, BlobIndex,
+    BlobProofOutput, BlobTransaction, BlobsHashes, BlockHeight, Calldata, ConsensusProposal,
+    ConsensusProposalHash, ConsensusStakingAction, ContractName, DataProposal, DataProposalHash,
+    DataProposalParent, Hashed, HyliOutput, Identity, IndexedBlobs, LaneBytesSize, LaneId,
+    OnchainEffect, ProgramId, ProofData, ProofDataHash, ProofTransaction, RegisterContractAction,
+    RegisterContractEffect, Signature, Signed, SignedBlock, StateCommitment, TimeoutWindow,
+    Transaction, TransactionData, TxContext, TxHash, ValidatorCandidacy, ValidatorPublicKey,
+    ValidatorSignature, Verifier, VerifiedProofTransaction,
 };
 use sha3::Digest as _;
 
@@ -2009,6 +2009,33 @@ fn main() {
         "mempool::MempoolNetMessage",
         "MempoolNetMessage::SyncReply(lane, [ValidatorDAG], dp_empty)",
         &mp_sync_reply,
+    );
+
+    // ---- Replay: BlobProofOutput ------------------------------------------
+    //
+    // BlobProofOutput is what node_state's proof verifier produces per
+    // verified blob: a small wrapper around the inner HyliOutput plus
+    // the originating tx and proof bookkeeping. The custom hash mixes
+    // blob_tx_hash, original_proof_hash, program_id, and the inner
+    // HyliOutput::hashed digest — see data_availability.rs.
+    let blob_proof_output_sample = BlobProofOutput {
+        blob_tx_hash: TxHash(vec![0x77; 4]),
+        original_proof_hash: ProofDataHash(proof_data.hashed().0.clone()),
+        hyli_output: hyli_output.clone(),
+        program_id: ProgramId(vec![0xaa; 8]),
+        verifier: Verifier("risc0".to_string()),
+    };
+    gen.write_borsh(
+        "model/blob_proof_output_sample",
+        "hyli_model::BlobProofOutput",
+        "BlobProofOutput wrapping the existing hyli_output sample",
+        &blob_proof_output_sample,
+    );
+    gen.write_hash(
+        "model/blob_proof_output_sample",
+        "hyli_model::BlobProofOutput",
+        "BlobProofOutput::hashed (blob_tx_hash ‖ original_proof_hash ‖ program_id ‖ HyliOutput::hashed)",
+        blob_proof_output_sample.hashed().0,
     );
 
     // ---- DA: SignedBlock --------------------------------------------------

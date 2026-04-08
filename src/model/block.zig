@@ -115,7 +115,7 @@ fn freeTransaction(allocator: std.mem.Allocator, tx: types.Transaction) void {
             allocator.free(vpt.verifier.value);
             if (vpt.proof) |p| allocator.free(p.bytes);
             allocator.free(vpt.proof_hash.bytes);
-            for (vpt.proven_blobs) |bp| allocator.free(bp.bytes);
+            for (vpt.proven_blobs) |bp| freeBlobProofOutput(allocator, bp);
             allocator.free(vpt.proven_blobs);
         },
     }
@@ -154,4 +154,71 @@ fn freeAggregateSignature(
     allocator.free(agg.signature.bytes);
     for (agg.validators) |v| allocator.free(v.bytes);
     allocator.free(agg.validators);
+}
+
+fn freeBlobProofOutput(
+    allocator: std.mem.Allocator,
+    bp: types.BlobProofOutput,
+) void {
+    allocator.free(bp.blob_tx_hash.bytes);
+    allocator.free(bp.original_proof_hash.bytes);
+    allocator.free(bp.program_id.bytes);
+    allocator.free(bp.verifier.value);
+    freeHyliOutput(allocator, bp.hyli_output);
+}
+
+fn freeHyliOutput(
+    allocator: std.mem.Allocator,
+    out: types.HyliOutput,
+) void {
+    allocator.free(out.initial_state.bytes);
+    allocator.free(out.next_state.bytes);
+    allocator.free(out.identity.value);
+    for (out.blobs.blobs) |entry| {
+        allocator.free(entry.blob.contract_name.value);
+        allocator.free(entry.blob.data.bytes);
+    }
+    allocator.free(out.blobs.blobs);
+    allocator.free(out.tx_hash.bytes);
+    for (out.state_reads) |sr| {
+        allocator.free(sr.contract_name.value);
+        allocator.free(sr.state_commitment.bytes);
+    }
+    allocator.free(out.state_reads);
+    if (out.tx_ctx) |ctx| {
+        allocator.free(ctx.lane_id.operator.bytes);
+        allocator.free(ctx.lane_id.suffix);
+        allocator.free(ctx.block_hash.bytes);
+    }
+    for (out.onchain_effects) |effect| freeOnchainEffect(allocator, effect);
+    allocator.free(out.onchain_effects);
+    allocator.free(out.program_outputs);
+}
+
+fn freeOnchainEffect(
+    allocator: std.mem.Allocator,
+    effect: types.OnchainEffect,
+) void {
+    switch (effect) {
+        .register_contract_with_constructor => |e| freeRegisterContractEffect(allocator, e),
+        .register_contract => |e| freeRegisterContractEffect(allocator, e),
+        .delete_contract => |name| allocator.free(name.value),
+        .update_contract_program_id => |pair| {
+            allocator.free(pair.contract_name.value);
+            allocator.free(pair.program_id.bytes);
+        },
+        .update_timeout_window => |pair| {
+            allocator.free(pair.contract_name.value);
+        },
+    }
+}
+
+fn freeRegisterContractEffect(
+    allocator: std.mem.Allocator,
+    effect: types.RegisterContractEffect,
+) void {
+    allocator.free(effect.verifier.value);
+    allocator.free(effect.program_id.bytes);
+    allocator.free(effect.state_commitment.bytes);
+    allocator.free(effect.contract_name.value);
 }

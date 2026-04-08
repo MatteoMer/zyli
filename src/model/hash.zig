@@ -336,6 +336,27 @@ pub fn hyliOutputHashed(output: *const types.HyliOutput) Digest32 {
     return h.finalize();
 }
 
+/// `hyli_model::BlobProofOutput::hashed` from
+/// `crates/hyli-model/src/node/data_availability.rs`.
+///
+/// Update order:
+///   1. `blob_tx_hash.0`
+///   2. `original_proof_hash.0`
+///   3. `program_id.0`
+///   4. `HyliOutput::hashed(hyli_output).0`
+///
+/// Note: the `verifier` field is on the wire but is intentionally absent
+/// from the hash.
+pub fn blobProofOutputHashed(bp: *const types.BlobProofOutput) Digest32 {
+    var h = Hasher.init();
+    h.update(bp.blob_tx_hash.bytes);
+    h.update(bp.original_proof_hash.bytes);
+    h.update(bp.program_id.bytes);
+    const inner = hyliOutputHashed(&bp.hyli_output);
+    h.update(&inner);
+    return h.finalize();
+}
+
 /// `hyli_model::DataProposal::hashed` from `crates/hyli-model/src/node/mempool.rs`.
 ///
 /// Update order:
@@ -644,6 +665,61 @@ test "HyliOutput::hashed matches Rust fixture" {
     };
     const got = hyliOutputHashed(&output);
     try testing.expectEqualSlices(u8, corpus.hash.model.hyli_output, &got);
+}
+
+test "BlobProofOutput::hashed matches Rust fixture" {
+    const blobs = &[_]types.IndexedBlobEntry{
+        .{
+            .index = .{ .index = 0 },
+            .blob = .{
+                .contract_name = .{ .value = "counter" },
+                .data = .{ .bytes = &[_]u8{ 0x10, 0x11 } },
+            },
+        },
+    };
+    const tx_ctx: types.TxContext = .{
+        .lane_id = .{
+            .operator = .{ .bytes = &[_]u8{} },
+            .suffix = "default",
+        },
+        .block_hash = .{ .bytes = &[_]u8{0x55} ** 4 },
+        .block_height = .{ .height = 123 },
+        .timestamp = .{ .millis = 456 },
+        .chain_id = 7,
+    };
+    const hyli_out: types.HyliOutput = .{
+        .version = 1,
+        .initial_state = .{ .bytes = &[_]u8{ 0x10, 0x11, 0x12, 0x13 } },
+        .next_state = .{ .bytes = &[_]u8{ 0x20, 0x21, 0x22, 0x23 } },
+        .identity = .{ .value = "alice@counter" },
+        .index = .{ .index = 0 },
+        .blobs = .{ .blobs = blobs },
+        .tx_blob_count = 1,
+        .tx_hash = .{ .bytes = &[_]u8{0x77} ** 4 },
+        .success = true,
+        .state_reads = &[_]types.StateRead{
+            .{
+                .contract_name = .{ .value = "counter" },
+                .state_commitment = .{ .bytes = &[_]u8{ 0x10, 0x11, 0x12, 0x13 } },
+            },
+        },
+        .tx_ctx = tx_ctx,
+        .onchain_effects = &[_]types.OnchainEffect{
+            .{ .register_contract = sampleHashRegisterContractEffect() },
+        },
+        .program_outputs = &[_]u8{ 0xab, 0xcd },
+    };
+    // The fixture uses original_proof_hash = sha3_256([0x42; 16]).
+    const proof_hash = sha3_256(&[_]u8{0x42} ** 16);
+    const bp: types.BlobProofOutput = .{
+        .blob_tx_hash = .{ .bytes = &[_]u8{0x77} ** 4 },
+        .original_proof_hash = .{ .bytes = &proof_hash },
+        .hyli_output = hyli_out,
+        .program_id = .{ .bytes = &[_]u8{0xaa} ** 8 },
+        .verifier = .{ .value = "risc0" },
+    };
+    const got = blobProofOutputHashed(&bp);
+    try testing.expectEqualSlices(u8, corpus.hash.model.blob_proof_output_sample, &got);
 }
 
 test "VerifiedProofTransaction::hashed matches ProofTransaction::hashed" {

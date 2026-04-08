@@ -8,7 +8,7 @@ handshake, the replay path, the full consensus message family
 the SignedBlock shape, and a stream-driven frame reader. The executable
 exposes a working `observe HOST:PORT` subcommand that connects, decodes
 frames, and prints PING/DATA labels.
-**159 tests passing. 125 fixtures.**
+**161 tests passing. 127 fixtures.**
 
 - `build.zig` / `build.zig.zon` set up; library + executable build cleanly.
 - Borsh codec in `src/model/borsh.zig` covers primitives, options, slices,

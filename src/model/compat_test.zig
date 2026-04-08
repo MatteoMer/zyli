@@ -1281,6 +1281,66 @@ test "fixture: MempoolNetMessage::SyncRequest (None, None)" {
     );
 }
 
+test "fixture: BlobProofOutput (full struct)" {
+    const blobs = &[_]types.IndexedBlobEntry{
+        .{
+            .index = .{ .index = 0 },
+            .blob = .{
+                .contract_name = .{ .value = "counter" },
+                .data = .{ .bytes = &[_]u8{ 0x10, 0x11 } },
+            },
+        },
+    };
+    const tx_ctx: types.TxContext = .{
+        .lane_id = .{
+            .operator = .{ .bytes = &[_]u8{} },
+            .suffix = "default",
+        },
+        .block_hash = .{ .bytes = &[_]u8{0x55} ** 4 },
+        .block_height = .{ .height = 123 },
+        .timestamp = .{ .millis = 456 },
+        .chain_id = 7,
+    };
+    const hyli_out: types.HyliOutput = .{
+        .version = 1,
+        .initial_state = .{ .bytes = &[_]u8{ 0x10, 0x11, 0x12, 0x13 } },
+        .next_state = .{ .bytes = &[_]u8{ 0x20, 0x21, 0x22, 0x23 } },
+        .identity = .{ .value = "alice@counter" },
+        .index = .{ .index = 0 },
+        .blobs = .{ .blobs = blobs },
+        .tx_blob_count = 1,
+        .tx_hash = .{ .bytes = &[_]u8{0x77} ** 4 },
+        .success = true,
+        .state_reads = &[_]types.StateRead{
+            .{
+                .contract_name = .{ .value = "counter" },
+                .state_commitment = .{ .bytes = &[_]u8{ 0x10, 0x11, 0x12, 0x13 } },
+            },
+        },
+        .tx_ctx = tx_ctx,
+        .onchain_effects = &[_]types.OnchainEffect{
+            .{ .register_contract = sampleRegisterContractEffect() },
+        },
+        .program_outputs = &[_]u8{ 0xab, 0xcd },
+    };
+    var hasher = std.crypto.hash.sha3.Sha3_256.init(.{});
+    hasher.update(&[_]u8{0x42} ** 16);
+    var proof_hash: [32]u8 = undefined;
+    hasher.final(&proof_hash);
+    const value: types.BlobProofOutput = .{
+        .blob_tx_hash = .{ .bytes = &[_]u8{0x77} ** 4 },
+        .original_proof_hash = .{ .bytes = &proof_hash },
+        .hyli_output = hyli_out,
+        .program_id = .{ .bytes = &[_]u8{0xaa} ** 8 },
+        .verifier = .{ .value = "risc0" },
+    };
+    try expectMatchesFixture(
+        types.BlobProofOutput,
+        value,
+        corpus.borsh.model.blob_proof_output_sample,
+    );
+}
+
 test "fixture: SignedBlock (one lane, one empty DataProposal, cp_full)" {
     const dps = &[_]types.DataProposal{sampleEmptyDataProposal()};
     const lane_dps = &[_]types.LaneDataProposals{

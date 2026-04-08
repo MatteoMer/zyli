@@ -44,6 +44,7 @@ Source: `hyli` git revision `e41899eb582d2d25d13a97a425ec76250484d45c`.
 | `borsh/mempool/validator_dag.bin` | `mempool::ValidatorDAG` | 36 | ValidatorDAG = SignedByValidator<(DataProposalHash, LaneBytesSize)> |
 | `borsh/model/aggregate_signature_2.bin` | `hyli_model::AggregateSignature` | 36 | AggregateSignature with 2 validators |
 | `borsh/model/blob_index_3.bin` | `hyli_model::BlobIndex` | 8 | BlobIndex(3) — note: usize → u64 on the wire |
+| `borsh/model/blob_proof_output_sample.bin` | `hyli_model::BlobProofOutput` | 316 | BlobProofOutput wrapping the existing hyli_output sample |
 | `borsh/model/blob_simple.bin` | `hyli_model::Blob` | 15 | Blob { contract_name="hyli", data=[1,2,3] } |
 | `borsh/model/blob_transaction.bin` | `hyli_model::BlobTransaction` | 51 | BlobTransaction(alice@hyli, [Blob(hyli,…), Blob(counter,…)]) |
 | `borsh/model/blobs_hashes_empty.bin` | `hyli_model::BlobsHashes` | 4 | BlobsHashes { hashes: {} } |
@@ -102,6 +103,7 @@ Source: `hyli` git revision `e41899eb582d2d25d13a97a425ec76250484d45c`.
 | `borsh/primitives/u8_42.bin` | `u8` | 1 | single byte 42 |
 | `borsh/primitives/vec_u32_two.bin` | `Vec<u32>` | 12 | [1, 2] |
 | `borsh/primitives/vec_u8_three.bin` | `Vec<u8>` | 7 | [1, 2, 3] |
+| `hash/model/blob_proof_output_sample.bin` | `hyli_model::BlobProofOutput` | 32 | BlobProofOutput::hashed (blob_tx_hash ‖ original_proof_hash ‖ program_id ‖ HyliOutput::hashed) |
 | `hash/model/blob_simple.bin` | `hyli_model::Blob` | 32 | Blob::hashed for the matching borsh fixture |
 | `hash/model/blob_transaction.bin` | `hyli_model::BlobTransaction` | 32 | BlobTransaction::hashed for the matching borsh fixture |
 | `hash/model/consensus_proposal_empty.bin` | `hyli_model::ConsensusProposal` | 32 | ConsensusProposal::hashed for the empty case |
