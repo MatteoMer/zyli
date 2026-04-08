@@ -22,7 +22,9 @@
 //! conversion.
 
 const std = @import("std");
-const bigint = @import("zolt_arith").bigint;
+const zolt_arith = @import("zolt_arith");
+const bigint = zolt_arith.bigint;
+const Fp = zolt_arith.bls12_381.Fp;
 const types = @import("../model/types.zig");
 
 /// Convert a Hyli `ValidatorPublicKey` (compressed BLS12-381 G1, 48
@@ -102,4 +104,19 @@ test "signatureToLimbs splits 96-byte input into two 6-limb coordinates" {
 test "signatureToLimbs rejects wrong-length input" {
     const short: types.Signature = .{ .bytes = &[_]u8{0xaa} ** 95 };
     try testing.expectError(Error.InvalidSignatureLength, signatureToLimbs(short));
+}
+
+// ---------------------------------------------------------------------------
+// Smoke test that the BLS12-381 Fp instantiation is reachable from
+// Zyli. This guards against future build.zig changes that accidentally
+// drop the dependency wiring.
+// ---------------------------------------------------------------------------
+
+test "BLS12-381 Fp is reachable from zyli" {
+    const one = Fp.one();
+    const two = Fp.fromRaw(.{ 2, 0, 0, 0, 0, 0 });
+    const three = Fp.add(one, two);
+    const raw = Fp.toRaw(three);
+    try testing.expectEqual(@as(u64, 3), raw[0]);
+    inline for (1..6) |i| try testing.expectEqual(@as(u64, 0), raw[i]);
 }
