@@ -25,6 +25,8 @@ const std = @import("std");
 const zolt_arith = @import("zolt_arith");
 const bigint = zolt_arith.bigint;
 const Fp = zolt_arith.bls12_381.Fp;
+const G1Affine = zolt_arith.bls12_381.G1Affine;
+const decodeG1Compressed = zolt_arith.bls12_381.decodeG1Compressed;
 const types = @import("../model/types.zig");
 
 /// Convert a Hyli `ValidatorPublicKey` (compressed BLS12-381 G1, 48
@@ -39,6 +41,22 @@ pub const Error = error{
 pub fn validatorPublicKeyToLimbs(pk: types.ValidatorPublicKey) Error![6]u64 {
     if (pk.bytes.len != 48) return Error.InvalidPubkeyLength;
     return bigint.fromBytesBe(6, pk.bytes);
+}
+
+/// Full Hyli `ValidatorPublicKey` → BLS12-381 G1 point conversion.
+/// Validates the compressed encoding, reconstructs the y coordinate
+/// from the curve equation, and returns an affine G1 point ready for
+/// pairing-based signature verification.
+///
+/// Subgroup membership is intentionally NOT checked here — Hyli
+/// validator pubkeys come from `BlstCrypto::new` which always
+/// produces in-subgroup points. A future hardening pass should add
+/// the explicit check for adversarially-supplied keys.
+pub fn validatorPublicKeyToG1(
+    pk: types.ValidatorPublicKey,
+) (Error || zolt_arith.bls12_381.PointDecodeError)!G1Affine {
+    if (pk.bytes.len != 48) return Error.InvalidPubkeyLength;
+    return decodeG1Compressed(pk.bytes);
 }
 
 /// Convert a Hyli BLS signature (96 compressed bytes for G2) into the
@@ -119,4 +137,21 @@ test "BLS12-381 Fp is reachable from zyli" {
     const raw = Fp.toRaw(three);
     try testing.expectEqual(@as(u64, 3), raw[0]);
     inline for (1..6) |i| try testing.expectEqual(@as(u64, 0), raw[i]);
+}
+
+test "validatorPublicKeyToG1 decodes the canonical G1 generator" {
+    // The canonical BLS12-381 G1 generator's compressed wire form.
+    const generator_hex = "97f1d3a73197d7942695638c4fa9ac0fc3688c4f9774b905a14e3a3f171bac586c55e83ff97a1aeffb3af00adb22c6bb";
+    var bytes: [48]u8 = undefined;
+    _ = try std.fmt.hexToBytes(&bytes, generator_hex);
+    const pk: types.ValidatorPublicKey = .{ .bytes = &bytes };
+    const point = try validatorPublicKeyToG1(pk);
+    try testing.expect(point.isOnCurve());
+    // The decoded point must be the canonical g1Generator().
+    try testing.expect(G1Affine.eql(point, zolt_arith.bls12_381.g1Generator()));
+}
+
+test "validatorPublicKeyToG1 rejects wrong-length input" {
+    const short: types.ValidatorPublicKey = .{ .bytes = &[_]u8{0x80} ** 47 };
+    try testing.expectError(Error.InvalidPubkeyLength, validatorPublicKeyToG1(short));
 }
