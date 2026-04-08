@@ -197,16 +197,6 @@ const zolt_arith = @import("zolt_arith");
 const bls12_381 = zolt_arith.bls12_381;
 const hash_to_curve_g2 = zolt_arith.hash_to_curve_g2;
 
-/// Build a fake ValidatorPublicKey + signed bytes for a known scalar.
-fn makeSignerForTest(sk: u64, msg: []const u8) struct {
-    sig_bytes: []u8,
-    pk_bytes: []u8,
-} {
-    _ = sk;
-    _ = msg;
-    return .{ .sig_bytes = undefined, .pk_bytes = undefined };
-}
-
 test "verifyConsensusMessage: sync_request short-circuits to true" {
     const msg: types.ConsensusNetMessage = .{
         .sync_request = .{ .bytes = &[_]u8{0x01} ** 4 },
@@ -253,8 +243,242 @@ test "verifyQuorumCertificate: rejects QC with wrong marker" {
     try testing.expect(!result);
 }
 
-// Round-trip tests with real (sk, pk, sig) tuples need a way to
-// produce wire-format pubkey and signature bytes from a constructed
-// affine point. The G1/G2 compressed-point encoder is not yet in
-// zolt_arith, so the round-trip cases land in the next iteration
-// alongside that encoder.
+// ---------------------------------------------------------------------------
+// End-to-end round-trip tests
+//
+// These build real (sk, pk, sig) triples for known scalars, encode the
+// pubkey and signature to wire bytes, wrap them in the Hyli envelope
+// types, and run them through the high-level verifier. The signing
+// path is "sign by hand": compute H(borsh(msg)) → G2, then multiply by
+// sk to get the signature.
+// ---------------------------------------------------------------------------
+
+const Allocator = std.mem.Allocator;
+
+/// Build a `(pk_bytes, sig_bytes)` tuple where the signature is over
+/// `msg_bytes`. The bytes are heap-allocated; the caller frees both.
+fn signWithScalar(
+    allocator: Allocator,
+    sk: u64,
+    msg_bytes: []const u8,
+) !struct { pk: []u8, sig: []u8 } {
+    const sk_limbs: [4]u64 = .{ sk, 0, 0, 0 };
+    const pk = bls12_381.g1Generator().mul(4, sk_limbs);
+    const h_msg = try hash_to_curve_g2.hashToG2(msg_bytes, bls.DST);
+    const sig_point = h_msg.mul(4, sk_limbs);
+
+    const pk_arr = bls12_381.encodeG1Compressed(pk);
+    const sig_arr = bls12_381.encodeG2Compressed(sig_point);
+
+    const pk_bytes = try allocator.dupe(u8, &pk_arr);
+    errdefer allocator.free(pk_bytes);
+    const sig_bytes = try allocator.dupe(u8, &sig_arr);
+    return .{ .pk = pk_bytes, .sig = sig_bytes };
+}
+
+test "verifyPrepareVote: round-trip with self-signed payload" {
+    const cph: types.ConsensusProposalHash = .{ .bytes = "cph-test" };
+    const payload: types.ConsensusVotePayload = .{
+        .consensus_proposal_hash = cph,
+        .marker = .prepare_vote,
+    };
+    const msg_bytes = try signable.signableBytesAlloc(
+        testing.allocator,
+        types.ConsensusVotePayload,
+        payload,
+    );
+    defer testing.allocator.free(msg_bytes);
+
+    const signed = try signWithScalar(testing.allocator, 7, msg_bytes);
+    defer testing.allocator.free(signed.pk);
+    defer testing.allocator.free(signed.sig);
+
+    const pv: types.PrepareVote = .{
+        .msg = payload,
+        .signature = .{
+            .signature = .{ .bytes = signed.sig },
+            .validator = .{ .bytes = signed.pk },
+        },
+    };
+    const ok = try verifyPrepareVote(testing.allocator, pv);
+    try testing.expect(ok);
+}
+
+test "verifyPrepareVote: rejects when signature is for wrong cph" {
+    const cph_signed: types.ConsensusProposalHash = .{ .bytes = "cph-A" };
+    const cph_envelope: types.ConsensusProposalHash = .{ .bytes = "cph-B" };
+    const signed_payload: types.ConsensusVotePayload = .{
+        .consensus_proposal_hash = cph_signed,
+        .marker = .prepare_vote,
+    };
+    const msg_bytes = try signable.signableBytesAlloc(
+        testing.allocator,
+        types.ConsensusVotePayload,
+        signed_payload,
+    );
+    defer testing.allocator.free(msg_bytes);
+
+    const signed = try signWithScalar(testing.allocator, 11, msg_bytes);
+    defer testing.allocator.free(signed.pk);
+    defer testing.allocator.free(signed.sig);
+
+    // Build an envelope that claims to be for cph-B but carries a
+    // signature over cph-A. The verifier rebuilds the signed bytes
+    // from the envelope's payload, so the pairing check fails.
+    const pv: types.PrepareVote = .{
+        .msg = .{
+            .consensus_proposal_hash = cph_envelope,
+            .marker = .prepare_vote,
+        },
+        .signature = .{
+            .signature = .{ .bytes = signed.sig },
+            .validator = .{ .bytes = signed.pk },
+        },
+    };
+    const ok = try verifyPrepareVote(testing.allocator, pv);
+    try testing.expect(!ok);
+}
+
+test "verifyConfirm: rejects QC built for the wrong marker" {
+    // Build a real signature over a ConfirmAck-marker payload, then
+    // wrap it as a PrepareQC inside a Confirm. The verifier first
+    // checks marker == prepare_vote on the QC and rejects.
+    const cph: types.ConsensusProposalHash = .{ .bytes = "cph-marker-test" };
+    const ack_payload: types.ConsensusVotePayload = .{
+        .consensus_proposal_hash = cph,
+        .marker = .confirm_ack,
+    };
+    const msg_bytes = try signable.signableBytesAlloc(
+        testing.allocator,
+        types.ConsensusVotePayload,
+        ack_payload,
+    );
+    defer testing.allocator.free(msg_bytes);
+
+    const signed = try signWithScalar(testing.allocator, 13, msg_bytes);
+    defer testing.allocator.free(signed.pk);
+    defer testing.allocator.free(signed.sig);
+
+    const validators = [_]types.ValidatorPublicKey{.{ .bytes = signed.pk }};
+    const confirm: types.ConfirmPayload = .{
+        .prepare_qc = .{
+            .aggregate = .{
+                .signature = .{ .bytes = signed.sig },
+                .validators = &validators,
+            },
+            .marker = .confirm_ack, // wrong: PrepareQC should carry .prepare_vote
+        },
+        .consensus_proposal_hash = cph,
+    };
+    const ok = try verifyConfirm(testing.allocator, confirm);
+    try testing.expect(!ok);
+}
+
+test "verifyConfirm: round-trip with PrepareQC built from one signer" {
+    const cph: types.ConsensusProposalHash = .{ .bytes = "cph-confirm" };
+    const vote_payload: types.ConsensusVotePayload = .{
+        .consensus_proposal_hash = cph,
+        .marker = .prepare_vote,
+    };
+    const msg_bytes = try signable.signableBytesAlloc(
+        testing.allocator,
+        types.ConsensusVotePayload,
+        vote_payload,
+    );
+    defer testing.allocator.free(msg_bytes);
+
+    const signed = try signWithScalar(testing.allocator, 17, msg_bytes);
+    defer testing.allocator.free(signed.pk);
+    defer testing.allocator.free(signed.sig);
+
+    const validators = [_]types.ValidatorPublicKey{.{ .bytes = signed.pk }};
+    const confirm: types.ConfirmPayload = .{
+        .prepare_qc = .{
+            .aggregate = .{
+                .signature = .{ .bytes = signed.sig },
+                .validators = &validators,
+            },
+            .marker = .prepare_vote,
+        },
+        .consensus_proposal_hash = cph,
+    };
+    const ok = try verifyConfirm(testing.allocator, confirm);
+    try testing.expect(ok);
+}
+
+test "verifyCommit: round-trip with CommitQC from two signers" {
+    const cph: types.ConsensusProposalHash = .{ .bytes = "cph-commit" };
+    const ack_payload: types.ConsensusVotePayload = .{
+        .consensus_proposal_hash = cph,
+        .marker = .confirm_ack,
+    };
+    const msg_bytes = try signable.signableBytesAlloc(
+        testing.allocator,
+        types.ConsensusVotePayload,
+        ack_payload,
+    );
+    defer testing.allocator.free(msg_bytes);
+
+    // Two signers with distinct scalars; aggregate the signatures.
+    const sk1_limbs: [4]u64 = .{ 19, 0, 0, 0 };
+    const sk2_limbs: [4]u64 = .{ 23, 0, 0, 0 };
+    const pk1 = bls12_381.g1Generator().mul(4, sk1_limbs);
+    const pk2 = bls12_381.g1Generator().mul(4, sk2_limbs);
+    const h_msg = try hash_to_curve_g2.hashToG2(msg_bytes, bls.DST);
+    const sig1 = h_msg.mul(4, sk1_limbs);
+    const sig2 = h_msg.mul(4, sk2_limbs);
+    const agg_sig = sig1.add(sig2);
+
+    const pk1_bytes = bls12_381.encodeG1Compressed(pk1);
+    const pk2_bytes = bls12_381.encodeG1Compressed(pk2);
+    const agg_sig_bytes = bls12_381.encodeG2Compressed(agg_sig);
+
+    const validators = [_]types.ValidatorPublicKey{
+        .{ .bytes = &pk1_bytes },
+        .{ .bytes = &pk2_bytes },
+    };
+    const commit: types.CommitPayload = .{
+        .commit_qc = .{
+            .aggregate = .{
+                .signature = .{ .bytes = &agg_sig_bytes },
+                .validators = &validators,
+            },
+            .marker = .confirm_ack,
+        },
+        .consensus_proposal_hash = cph,
+    };
+    const ok = try verifyCommit(testing.allocator, commit);
+    try testing.expect(ok);
+}
+
+test "verifyConsensusMessage: dispatches to the right verifier per variant" {
+    // A round-tripped PrepareVote should verify when wrapped in a
+    // ConsensusNetMessage and routed through the top-level dispatcher.
+    const cph: types.ConsensusProposalHash = .{ .bytes = "cph-dispatch" };
+    const payload: types.ConsensusVotePayload = .{
+        .consensus_proposal_hash = cph,
+        .marker = .prepare_vote,
+    };
+    const msg_bytes = try signable.signableBytesAlloc(
+        testing.allocator,
+        types.ConsensusVotePayload,
+        payload,
+    );
+    defer testing.allocator.free(msg_bytes);
+
+    const signed = try signWithScalar(testing.allocator, 29, msg_bytes);
+    defer testing.allocator.free(signed.pk);
+    defer testing.allocator.free(signed.sig);
+
+    const cnm: types.ConsensusNetMessage = .{
+        .prepare_vote = .{
+            .msg = payload,
+            .signature = .{
+                .signature = .{ .bytes = signed.sig },
+                .validator = .{ .bytes = signed.pk },
+            },
+        },
+    };
+    const ok = try verifyConsensusMessage(testing.allocator, cnm);
+    try testing.expect(ok);
+}
