@@ -17,16 +17,17 @@ use std::path::{Path, PathBuf};
 
 use borsh::BorshSerialize;
 use hyli_model::{
-    utils::TimestampMs, AggregateSignature, Blob, BlobData, BlobHash, BlobIndex,
-    BlobProofOutput, BlobTransaction, BlobsHashes, BlockHeight, Calldata, ConsensusProposal,
-    ConsensusProposalHash, ConsensusStakingAction, Contract, ContractName, DataAvailabilityEvent,
-    DataAvailabilityRequest, DataProposal, DataProposalHash, DataProposalParent, Hashed,
-    HyliOutput, Identity, IndexedBlobs, LaneBytesSize, LaneId, MempoolStatusEvent, OnchainEffect,
-    ProgramId, ProofData, ProofDataHash, ProofTransaction, RegisterContractAction,
-    RegisterContractEffect, Signature, Signed, SignedBlock, StakingAction, StateCommitment,
-    TimeoutWindow, Transaction, TransactionData, TransactionKind, TransactionMetadata,
-    TransactionStateEvent, TxContext, TxHash, TxId, ValidatorCandidacy, ValidatorPublicKey,
-    ValidatorSignature, Verifier, VerifiedProofTransaction,
+    utils::TimestampMs,
+    verifier_worker::{VerifyRequest, VerifyResponse},
+    AggregateSignature, Blob, BlobData, BlobHash, BlobIndex, BlobProofOutput, BlobTransaction,
+    BlobsHashes, BlockHeight, Calldata, ConsensusProposal, ConsensusProposalHash,
+    ConsensusStakingAction, Contract, ContractName, DataAvailabilityEvent, DataAvailabilityRequest,
+    DataProposal, DataProposalHash, DataProposalParent, Hashed, HyliOutput, Identity, IndexedBlobs,
+    LaneBytesSize, LaneId, MempoolStatusEvent, OnchainEffect, ProgramId, ProofData, ProofDataHash,
+    ProofTransaction, RegisterContractAction, RegisterContractEffect, Signature, Signed,
+    SignedBlock, StakingAction, StateCommitment, TimeoutWindow, Transaction, TransactionData,
+    TransactionKind, TransactionMetadata, TransactionStateEvent, TxContext, TxHash, TxId,
+    ValidatorCandidacy, ValidatorPublicKey, ValidatorSignature, Verifier, VerifiedProofTransaction,
 };
 use sha3::Digest as _;
 
@@ -2302,6 +2303,50 @@ fn main() {
         "hyli_model::TransactionStateEvent",
         "TransactionStateEvent::NewProof { blob_index=0, proof_tx_hash=[0x77;4], output=[0xab,0xcd] }",
         &tse_new_proof,
+    );
+
+    // ---- Verifier-worker IPC ---------------------------------------------
+    //
+    // The unix-domain stream protocol the external proof verifiers
+    // (SP1, RISC0, Jolt, ...) speak. Plain length-delimited
+    // borsh(VerifyRequest) and borsh(VerifyResponse) records over the
+    // socket. Pin both shapes here so the future Zig verifier-worker
+    // supervisor lands with byte-for-byte compatibility.
+    let verify_request = VerifyRequest {
+        verifier: "risc0".to_string(),
+        proof: vec![0x42; 16],
+        program_id: vec![0xaa; 8],
+        recursive: false,
+    };
+    gen.write_borsh(
+        "model/verify_request_sample",
+        "hyli_model::verifier_worker::VerifyRequest",
+        "VerifyRequest { verifier=risc0, proof=[0x42;16], program_id=[0xaa;8], recursive=false }",
+        &verify_request,
+    );
+
+    let verify_response_ok = VerifyResponse {
+        ok: true,
+        outputs: vec![0xbe, 0xef],
+        error: String::new(),
+    };
+    gen.write_borsh(
+        "model/verify_response_ok",
+        "hyli_model::verifier_worker::VerifyResponse",
+        "VerifyResponse { ok=true, outputs=[0xbe,0xef], error=\"\" }",
+        &verify_response_ok,
+    );
+
+    let verify_response_err = VerifyResponse {
+        ok: false,
+        outputs: vec![],
+        error: "verification failed".to_string(),
+    };
+    gen.write_borsh(
+        "model/verify_response_err",
+        "hyli_model::verifier_worker::VerifyResponse",
+        "VerifyResponse { ok=false, outputs=[], error=\"verification failed\" }",
+        &verify_response_err,
     );
 
     // ---- Crypto: BLS signable payload reference ---------------------------

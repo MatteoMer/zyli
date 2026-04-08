@@ -124,6 +124,9 @@ pub const borsh = struct {
         pub const validator_signature: []const u8 = @embedFile("corpus/borsh/model/validator_signature.bin");
         pub const verified_proof_transaction: []const u8 = @embedFile("corpus/borsh/model/verified_proof_transaction.bin");
         pub const verifier_risc0: []const u8 = @embedFile("corpus/borsh/model/verifier_risc0.bin");
+        pub const verify_request_sample: []const u8 = @embedFile("corpus/borsh/model/verify_request_sample.bin");
+        pub const verify_response_err: []const u8 = @embedFile("corpus/borsh/model/verify_response_err.bin");
+        pub const verify_response_ok: []const u8 = @embedFile("corpus/borsh/model/verify_response_ok.bin");
     };
     pub const primitives = struct {
         pub const i32_neg_one: []const u8 = @embedFile("corpus/borsh/primitives/i32_neg_one.bin");

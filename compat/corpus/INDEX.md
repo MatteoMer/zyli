@@ -115,6 +115,9 @@ Source: `hyli` git revision `e41899eb582d2d25d13a97a425ec76250484d45c`.
 | `borsh/model/validator_signature.bin` | `hyli_model::ValidatorSignature` | 20 | ValidatorSignature { sig=[0xff;8], validator=[0x01;4] } |
 | `borsh/model/verified_proof_transaction.bin` | `hyli_model::VerifiedProofTransaction` | 76 | VerifiedProofTransaction(counter, proof=None, proof_size=16) |
 | `borsh/model/verifier_risc0.bin` | `hyli_model::Verifier` | 9 | Verifier("risc0") |
+| `borsh/model/verify_request_sample.bin` | `hyli_model::verifier_worker::VerifyRequest` | 42 | VerifyRequest { verifier=risc0, proof=[0x42;16], program_id=[0xaa;8], recursive=false } |
+| `borsh/model/verify_response_err.bin` | `hyli_model::verifier_worker::VerifyResponse` | 28 | VerifyResponse { ok=false, outputs=[], error="verification failed" } |
+| `borsh/model/verify_response_ok.bin` | `hyli_model::verifier_worker::VerifyResponse` | 11 | VerifyResponse { ok=true, outputs=[0xbe,0xef], error="" } |
 | `borsh/primitives/i32_neg_one.bin` | `i32` | 4 | -1 as two's complement |
 | `borsh/primitives/option_u32_none.bin` | `Option<u32>` | 1 | None |
 | `borsh/primitives/option_u32_some_7.bin` | `Option<u32>` | 5 | Some(7) |

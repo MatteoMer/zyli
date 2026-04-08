@@ -1680,6 +1680,50 @@ test "fixture: TransactionStateEvent::NewProof" {
     );
 }
 
+// ---------------------------------------------------------------------------
+// Verifier-worker IPC
+// ---------------------------------------------------------------------------
+
+test "fixture: VerifyRequest sample" {
+    const value: types.VerifyRequest = .{
+        .verifier = "risc0",
+        .proof = &[_]u8{0x42} ** 16,
+        .program_id = &[_]u8{0xaa} ** 8,
+        .recursive = false,
+    };
+    try expectMatchesFixture(
+        types.VerifyRequest,
+        value,
+        corpus.borsh.model.verify_request_sample,
+    );
+}
+
+test "fixture: VerifyResponse ok" {
+    const value: types.VerifyResponse = .{
+        .ok = true,
+        .outputs = &[_]u8{ 0xbe, 0xef },
+        .@"error" = "",
+    };
+    try expectMatchesFixture(
+        types.VerifyResponse,
+        value,
+        corpus.borsh.model.verify_response_ok,
+    );
+}
+
+test "fixture: VerifyResponse error" {
+    const value: types.VerifyResponse = .{
+        .ok = false,
+        .outputs = &[_]u8{},
+        .@"error" = "verification failed",
+    };
+    try expectMatchesFixture(
+        types.VerifyResponse,
+        value,
+        corpus.borsh.model.verify_response_err,
+    );
+}
+
 test "fixture: MempoolNetMessage::SyncReply" {
     const dags = &[_]types.ValidatorDag{sampleValidatorDag()};
     const value: types.MempoolNetMessage = .{

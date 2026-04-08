@@ -799,6 +799,28 @@ pub const TransactionStateEvent = union(enum) {
     dropped_as_duplicate: void,
 };
 
+// ---------------------------------------------------------------------------
+// Verifier-worker IPC types from
+// `hyli/crates/hyli-model/src/verifier_worker.rs`
+// ---------------------------------------------------------------------------
+
+/// `hyli_model::verifier_worker::VerifyRequest`. Length-delimited
+/// borsh records on a Unix-domain stream are how Hyli talks to its
+/// external proof verifiers (SP1, RISC0, Jolt).
+pub const VerifyRequest = struct {
+    verifier: []const u8,
+    proof: []const u8,
+    program_id: []const u8,
+    recursive: bool,
+};
+
+/// `hyli_model::verifier_worker::VerifyResponse`.
+pub const VerifyResponse = struct {
+    ok: bool,
+    outputs: []const u8,
+    @"error": []const u8,
+};
+
 test "type sizes are platform-stable where it matters" {
     // BlockHeight is u64, not usize.
     try std.testing.expectEqual(@as(usize, 8), @sizeOf(u64));
