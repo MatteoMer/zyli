@@ -18,4 +18,5 @@ test {
     _ = handshake;
     _ = da_sync;
     _ = identity;
+    _ = @import("integration_test.zig");
 }
