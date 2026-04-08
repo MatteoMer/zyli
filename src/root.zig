@@ -9,6 +9,7 @@ pub const crypto = @import("crypto/mod.zig");
 pub const wire = @import("wire/mod.zig");
 pub const node = @import("node/mod.zig");
 pub const storage = @import("storage/mod.zig");
+pub const state = @import("state/mod.zig");
 
 test {
     _ = model;
@@ -16,4 +17,5 @@ test {
     _ = wire;
     _ = node;
     _ = storage;
+    _ = state;
 }
