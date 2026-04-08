@@ -147,6 +147,26 @@ pub const BlockStore = struct {
         };
     }
 
+    /// Return all stored slot numbers as an owned, ascending-sorted slice.
+    /// Caller must free the returned slice with `allocator.free`.
+    pub fn allSlots(self: *BlockStore, allocator: std.mem.Allocator) ![]types.Slot {
+        var slots = try allocator.alloc(types.Slot, self.count);
+        errdefer allocator.free(slots);
+        var i: usize = 0;
+        var it = self.index.keyIterator();
+        while (it.next()) |key| {
+            slots[i] = key.*;
+            i += 1;
+        }
+        // Sort ascending.
+        std.mem.sort(types.Slot, slots[0..i], {}, struct {
+            fn lt(_: void, a: types.Slot, b: types.Slot) bool {
+                return a < b;
+            }
+        }.lt);
+        return slots[0..i];
+    }
+
     /// Scan the file from the beginning to rebuild the slot → offset index.
     fn rebuildIndex(self: *BlockStore) !void {
         self.file.seekTo(0) catch return;
@@ -326,4 +346,118 @@ test "BlockStore: empty file" {
     try testing.expectEqual(@as(types.Slot, 0), store.latest_slot);
     const missing = try store.getBySlot(1);
     try testing.expect(missing == null);
+}
+
+test "BlockStore: allSlots returns sorted list" {
+    const path = "/tmp/zyli_test_block_store_all_slots.dat";
+    defer std.fs.cwd().deleteFile(path) catch {};
+
+    var store = try BlockStore.open(testing.allocator, path);
+    defer store.close();
+
+    // Append out of order.
+    _ = try store.append(testSignedBlock(5));
+    _ = try store.append(testSignedBlock(1));
+    _ = try store.append(testSignedBlock(3));
+
+    const slots = try store.allSlots(testing.allocator);
+    defer testing.allocator.free(slots);
+
+    try testing.expectEqual(@as(usize, 3), slots.len);
+    try testing.expectEqual(@as(types.Slot, 1), slots[0]);
+    try testing.expectEqual(@as(types.Slot, 3), slots[1]);
+    try testing.expectEqual(@as(types.Slot, 5), slots[2]);
+}
+
+test "BlockStore: round-trip block with non-empty fields" {
+    const path = "/tmp/zyli_test_block_store_fields.dat";
+    defer std.fs.cwd().deleteFile(path) catch {};
+
+    var store = try BlockStore.open(testing.allocator, path);
+    defer store.close();
+
+    // Block with non-trivial fields: parent_hash, cut entries, and
+    // multiple validators.
+    const block: types.SignedBlock = .{
+        .data_proposals = &[_]types.LaneDataProposals{},
+        .consensus_proposal = .{
+            .slot = 42,
+            .parent_hash = .{ .bytes = &[_]u8{0xab} ** 32 },
+            .cut = &[_]types.CutEntry{
+                .{
+                    .lane_id = .{ .operator = .{ .bytes = &[_]u8{0x05} ** 4 }, .suffix = "a" },
+                    .dp_hash = .{ .bytes = "dphash1" },
+                    .lane_bytes_size = .{ .bytes = 512 },
+                    .aggregate_signature = .{
+                        .signature = .{ .bytes = &[_]u8{0xdd} ** 12 },
+                        .validators = &[_]types.ValidatorPublicKey{
+                            .{ .bytes = &[_]u8{0x05} ** 4 },
+                        },
+                    },
+                },
+            },
+            .staking_actions = &[_]types.ConsensusStakingAction{},
+            .timestamp = .{ .millis = 1700000000001 },
+        },
+        .certificate = .{
+            .signature = .{ .bytes = &[_]u8{0xcc} ** 12 },
+            .validators = &[_]types.ValidatorPublicKey{
+                .{ .bytes = &[_]u8{0x01} ** 4 },
+                .{ .bytes = &[_]u8{0x02} ** 4 },
+                .{ .bytes = &[_]u8{0x03} ** 4 },
+            },
+        },
+    };
+    _ = try store.append(block);
+
+    var decoded = (try store.getBySlot(42)).?;
+    defer decoded.deinit();
+
+    try testing.expectEqual(@as(types.Slot, 42), decoded.value.consensus_proposal.slot);
+    try testing.expectEqualSlices(u8, &[_]u8{0xab} ** 32, decoded.value.consensus_proposal.parent_hash.bytes);
+    try testing.expectEqual(@as(usize, 1), decoded.value.consensus_proposal.cut.len);
+    try testing.expectEqualSlices(u8, "a", decoded.value.consensus_proposal.cut[0].lane_id.suffix);
+    try testing.expectEqualSlices(u8, "dphash1", decoded.value.consensus_proposal.cut[0].dp_hash.bytes);
+    try testing.expectEqual(@as(usize, 3), decoded.value.certificate.validators.len);
+    try testing.expectEqual(@as(u128, 1700000000001), decoded.value.consensus_proposal.timestamp.millis);
+}
+
+test "BlockStore: append after reopen continues correctly" {
+    const path = "/tmp/zyli_test_block_store_append_reopen.dat";
+    defer std.fs.cwd().deleteFile(path) catch {};
+
+    // Write 2 blocks.
+    {
+        var store = try BlockStore.open(testing.allocator, path);
+        defer store.close();
+        _ = try store.append(testSignedBlock(1));
+        _ = try store.append(testSignedBlock(2));
+    }
+
+    // Reopen and append 1 more.
+    {
+        var store = try BlockStore.open(testing.allocator, path);
+        defer store.close();
+
+        try testing.expectEqual(@as(usize, 2), store.count);
+        _ = try store.append(testSignedBlock(3));
+        try testing.expectEqual(@as(usize, 3), store.count);
+        try testing.expectEqual(@as(types.Slot, 3), store.latest_slot);
+    }
+
+    // Reopen and verify all 3 are present.
+    {
+        var store = try BlockStore.open(testing.allocator, path);
+        defer store.close();
+
+        try testing.expectEqual(@as(usize, 3), store.count);
+
+        const slots = try store.allSlots(testing.allocator);
+        defer testing.allocator.free(slots);
+
+        try testing.expectEqual(@as(usize, 3), slots.len);
+        try testing.expectEqual(@as(types.Slot, 1), slots[0]);
+        try testing.expectEqual(@as(types.Slot, 2), slots[1]);
+        try testing.expectEqual(@as(types.Slot, 3), slots[2]);
+    }
 }
