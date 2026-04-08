@@ -60,3 +60,9 @@ Source: `hyli` git revision `e41899eb582d2d25d13a97a425ec76250484d45c`.
 | `hash/model/register_contract_action.bin` | `hyli_model::RegisterContractAction` | 32 | RegisterContractAction::hashed (constructor_metadata excluded) |
 | `hash/model/verified_proof_transaction.bin` | `hyli_model::VerifiedProofTransaction` | 32 | VerifiedProofTransaction::hashed |
 | `hash/primitives/sha3_256_empty.bin` | `sha3::Sha3_256` | 32 | SHA3-256 of empty input |
+| `wire/messages/tcp_message_data_header_framed.bin` | `[u8]` | 24 | Framed TcpData{headers=[(k,v)], payload=[0xaa,0xbb]} |
+| `wire/messages/tcp_message_data_header_inner.bin` | `TcpWireData` | 20 | TcpData{headers=[(k,v)], payload=[0xaa,0xbb]} |
+| `wire/messages/tcp_message_data_simple_framed.bin` | `[u8]` | 15 | Framed TcpData{headers=[], payload=[1,2,3]} |
+| `wire/messages/tcp_message_data_simple_inner.bin` | `TcpWireData` | 11 | TcpData{headers=[], payload=[1,2,3]} as borsh(TcpWireData) |
+| `wire/messages/tcp_message_ping_framed.bin` | `[u8]` | 8 | Framed TcpMessage::Ping (BE length + b"PING") |
+| `wire/messages/tcp_message_ping_inner.bin` | `[u8; 4]` | 4 | TcpMessage::Ping inner bytes (b"PING") |

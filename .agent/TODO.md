@@ -2,7 +2,8 @@
 
 ## Status
 
-Phase 0 + early Phase 3 underway. **73 tests passing.**
+Phase 0 + early Phase 3 + first crack at Phase 4 wire layer.
+**85 tests passing.**
 
 - `build.zig` / `build.zig.zon` set up; library + executable build cleanly.
 - Borsh codec in `src/model/borsh.zig` covers primitives, options, slices,
@@ -41,9 +42,23 @@ Phase 0 + early Phase 3 underway. **73 tests passing.**
 - Inventory of protocol-critical Hyli types lives in
   `.agent/hyli-model-inventory.md` and drives the next batch of
   fixtures.
+- `src/wire/` exists with `framing.zig` (4-byte BE length-delimited
+  frames matching `tokio_util::LengthDelimitedCodec` defaults) and
+  `tcp_message.zig` (the `TcpMessage::Ping`/`Data` shape from
+  `hyli_net::tcp`, including the `b"PING"` magic that bypasses borsh).
+  Both are validated against six `wire/messages/*` fixtures (PING +
+  TcpData with and without headers, framed and unframed). The framing
+  decoder is pull-based with explicit `need_more`/`frame` results so
+  it can be dropped over an `std.net.Stream` later without re-design.
 
 ## Immediate
 
+- Add `P2PTcpMessage<Data>` envelope (Borsh enum: Handshake / Data) and
+  the `Handshake` shape (`Hello`/`Verack`, each carrying
+  `(Canal, SignedByValidator<NodeConnectionData>, TimestampMs)`) under
+  `zyli/wire`. This is what the observer needs to negotiate a
+  connection.
+- Add fixtures + Zig mirror for `Canal` and `NodeConnectionData`.
 - Add fixtures + Zig mirror for `Calldata`, `HyliOutput`, and
   `OnchainEffect` (along with their hashes where they exist). Each is
   consensus-critical for the replay path.
@@ -57,8 +72,9 @@ Phase 0 + early Phase 3 underway. **73 tests passing.**
   (`bigint`, `field`, `ec`, `msm`, `pairing`, `thread_pool`).
 - Add BLS12-381 field, curve, pairing, and aggregation support to
   `zolt-arith`, with vectors borrowed from Rust Hyli / `blst`.
-- Implement Hyli TCP framing and handshake under `zyli/wire`.
-- Implement signed message header verification.
+- Implement signed message header verification once BLS12-381 lands.
+- Wire `framing.FrameDecoder` over a real `std.net.Stream` to make the
+  observer attempt a live testnet connection.
 
 ## Next
 

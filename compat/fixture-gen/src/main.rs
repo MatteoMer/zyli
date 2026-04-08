@@ -750,6 +750,111 @@ fn main() {
         cp_full.hashed().0,
     );
 
+    // ---- Wire framing -----------------------------------------------------
+    //
+    // Hyli wraps every TCP message in a default tokio-util
+    // `LengthDelimitedCodec` frame: a 4-byte BIG-ENDIAN length followed
+    // by `len` bytes of payload. The payload itself is one of:
+    //   - `b"PING"` literal (4 bytes), or
+    //   - `borsh(TcpWireData)` where `TcpWireData = { headers, payload }`
+    //
+    // Note that `TcpMessage::Ping` is NOT borsh-encoded as an enum variant —
+    // hyli sends the raw 4 bytes "PING" and the receiver detects them by
+    // string match before attempting borsh deserialization. This is the
+    // wire-level quirk that the Zig framing layer has to mirror exactly.
+    //
+    // Both the framed bytes (with the BE length prefix) and the inner
+    // bytes (without it) are emitted as fixtures so the Zig side can test
+    // each layer independently.
+
+    // Mirror of `hyli_net::tcp::TcpWireData`. The Rust definition is
+    // pub(crate), so we redeclare it here. If the upstream layout ever
+    // changes, the test against the existing serialize_tcp_message Rust
+    // assertions below will break loudly.
+    #[derive(borsh::BorshSerialize)]
+    struct TcpWireData {
+        headers: Vec<(String, String)>,
+        payload: Vec<u8>,
+    }
+
+    fn frame(payload: &[u8]) -> Vec<u8> {
+        let len: u32 = payload.len().try_into().expect("frame fits in u32");
+        let mut out = Vec::with_capacity(4 + payload.len());
+        out.extend_from_slice(&len.to_be_bytes());
+        out.extend_from_slice(payload);
+        out
+    }
+
+    // Inner bytes — TcpMessage::Ping is the literal "PING".
+    gen.write_bytes(
+        "wire",
+        "messages/tcp_message_ping_inner",
+        "[u8; 4]",
+        "TcpMessage::Ping inner bytes (b\"PING\")".to_string(),
+        b"PING".to_vec(),
+    );
+    // Framed bytes — 4-byte BE length prefix (0x00000004) + b"PING".
+    gen.write_bytes(
+        "wire",
+        "messages/tcp_message_ping_framed",
+        "[u8]",
+        "Framed TcpMessage::Ping (BE length + b\"PING\")".to_string(),
+        frame(b"PING"),
+    );
+
+    // Inner bytes — TcpData with empty headers and a 3-byte payload.
+    // This matches the existing hyli unit test (`test_serialize_tcp_message`)
+    // which asserts the bytes are [0,0,0,0, 3,0,0,0, 1,2,3]:
+    //   - 4 bytes: headers Vec length = 0 (LE u32)
+    //   - 4 bytes: payload Vec length = 3 (LE u32)
+    //   - 3 bytes: payload [1,2,3]
+    let tcp_data_simple = TcpWireData {
+        headers: vec![],
+        payload: vec![1, 2, 3],
+    };
+    let tcp_data_simple_bytes = borsh::to_vec(&tcp_data_simple).expect("borsh tcp data simple");
+    assert_eq!(
+        tcp_data_simple_bytes,
+        vec![0, 0, 0, 0, 3, 0, 0, 0, 1, 2, 3],
+        "TcpWireData layout drifted from upstream hyli expectation",
+    );
+    gen.write_bytes(
+        "wire",
+        "messages/tcp_message_data_simple_inner",
+        "TcpWireData",
+        "TcpData{headers=[], payload=[1,2,3]} as borsh(TcpWireData)".to_string(),
+        tcp_data_simple_bytes.clone(),
+    );
+    gen.write_bytes(
+        "wire",
+        "messages/tcp_message_data_simple_framed",
+        "[u8]",
+        "Framed TcpData{headers=[], payload=[1,2,3]}".to_string(),
+        frame(&tcp_data_simple_bytes),
+    );
+
+    // Inner bytes — TcpData with one header and a 3-byte payload.
+    let tcp_data_with_header = TcpWireData {
+        headers: vec![("k".to_string(), "v".to_string())],
+        payload: vec![0xaa, 0xbb],
+    };
+    let tcp_data_with_header_bytes =
+        borsh::to_vec(&tcp_data_with_header).expect("borsh tcp data header");
+    gen.write_bytes(
+        "wire",
+        "messages/tcp_message_data_header_inner",
+        "TcpWireData",
+        "TcpData{headers=[(k,v)], payload=[0xaa,0xbb]}".to_string(),
+        tcp_data_with_header_bytes.clone(),
+    );
+    gen.write_bytes(
+        "wire",
+        "messages/tcp_message_data_header_framed",
+        "[u8]",
+        "Framed TcpData{headers=[(k,v)], payload=[0xaa,0xbb]}".to_string(),
+        frame(&tcp_data_with_header_bytes),
+    );
+
     let hyli_rev = detect_hyli_revision();
     gen.write_index(&hyli_rev);
     gen.write_zig_manifest(&hyli_rev);

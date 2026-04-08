@@ -5,7 +5,9 @@
 //! implementation plan, not to a Rust crate boundary.
 
 pub const model = @import("model/mod.zig");
+pub const wire = @import("wire/mod.zig");
 
 test {
     _ = model;
+    _ = wire;
 }

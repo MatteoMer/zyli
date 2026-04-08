@@ -75,3 +75,14 @@ pub const hash = struct {
     };
 };
 
+pub const wire = struct {
+    pub const messages = struct {
+        pub const tcp_message_data_header_framed: []const u8 = @embedFile("corpus/wire/messages/tcp_message_data_header_framed.bin");
+        pub const tcp_message_data_header_inner: []const u8 = @embedFile("corpus/wire/messages/tcp_message_data_header_inner.bin");
+        pub const tcp_message_data_simple_framed: []const u8 = @embedFile("corpus/wire/messages/tcp_message_data_simple_framed.bin");
+        pub const tcp_message_data_simple_inner: []const u8 = @embedFile("corpus/wire/messages/tcp_message_data_simple_inner.bin");
+        pub const tcp_message_ping_framed: []const u8 = @embedFile("corpus/wire/messages/tcp_message_ping_framed.bin");
+        pub const tcp_message_ping_inner: []const u8 = @embedFile("corpus/wire/messages/tcp_message_ping_inner.bin");
+    };
+};
+
