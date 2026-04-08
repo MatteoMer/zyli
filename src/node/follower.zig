@@ -95,12 +95,19 @@ pub const Follower = struct {
         // anyway.
         if (p.proposal.slot == 0) return .{ .rejected = .{ .reason = .structural_invalid } };
 
-        // First-ever Prepare: accept if it's slot 1 with a Genesis
-        // ticket. The validator already enforces the Genesis ↔ slot=1
-        // bond, so we just need the slot ordering to hold.
+        // First-ever Prepare: if we're at slot 0, we can accept slot 1
+        // directly (Genesis ticket). Higher slots are a gap — we need
+        // to catch up first.
         if (self.slot == 0) {
             if (p.proposal.slot != 1) {
-                return .{ .rejected = .{ .reason = .out_of_order } };
+                // We haven't seen any proposals yet, and this one isn't
+                // slot 1. This is a gap — the caller should SyncRequest
+                // the parent_hash from the Prepare's proposal.
+                return .{ .gap_detected = .{
+                    .our_slot = 0,
+                    .their_slot = p.proposal.slot,
+                    .parent_hash = p.proposal.parent_hash,
+                } };
             }
             self.slot = p.proposal.slot;
             self.view = p.view;
@@ -115,6 +122,23 @@ pub const Follower = struct {
             if (!validate.validateProposalSucceeds(prev, self.view, p.proposal, p.view)) {
                 return .{ .rejected = .{ .reason = .out_of_order } };
             }
+        }
+
+        // Gap detection: if the incoming slot is more than 1 ahead of
+        // what we've committed, we're missing blocks. The Prepare is
+        // still valid structurally, but the caller should request the
+        // missing range via SyncRequest or DA sync.
+        if (p.proposal.slot > self.last_commit_slot + 2) {
+            // Accept the Prepare (the chain will keep making progress)
+            // but also signal the gap.
+            self.slot = p.proposal.slot;
+            self.view = p.view;
+            self.accepted_proposal = p.proposal;
+            return .{ .gap_detected = .{
+                .our_slot = self.last_commit_slot,
+                .their_slot = p.proposal.slot,
+                .parent_hash = p.proposal.parent_hash,
+            } };
         }
 
         self.slot = p.proposal.slot;
@@ -235,6 +259,11 @@ pub const Event = union(enum) {
     accepted_sync: SlotViewInfo,
     /// We've seen a Commit for the current slot; the chain advances.
     committed: CommittedInfo,
+    /// The follower detected a gap in its chain: the incoming message
+    /// references a slot well ahead of what we've committed. The caller
+    /// should issue a SyncRequest for `parent_hash` or start a DA sync
+    /// to fill the missing range `(our_slot, their_slot)`.
+    gap_detected: GapInfo,
     /// A vote/qc/observation that doesn't change state but is worth
     /// surfacing for tracing.
     observed: GenericInfo,
@@ -254,6 +283,16 @@ pub const Event = union(enum) {
         slot: types.Slot,
         validators: usize,
         cph: types.ConsensusProposalHash,
+    };
+
+    pub const GapInfo = struct {
+        /// The highest slot we've committed locally.
+        our_slot: types.Slot,
+        /// The slot the incoming message references.
+        their_slot: types.Slot,
+        /// The parent hash from the incoming proposal. The caller can
+        /// issue a `SyncRequest` for this hash to fill the gap.
+        parent_hash: types.ConsensusProposalHash,
     };
 
     pub const GenericInfo = struct {
@@ -346,7 +385,7 @@ test "Follower: first Prepare must be slot 1" {
     try testing.expectEqual(@as(types.Slot, 1), f.slot);
 }
 
-test "Follower: rejects Prepare at slot 5 when starting from 0" {
+test "Follower: detects gap for Prepare at slot 5 when starting from 0" {
     var f = Follower.init();
     const msg: types.ConsensusNetMessage = .{
         .prepare = .{
@@ -359,8 +398,9 @@ test "Follower: rejects Prepare at slot 5 when starting from 0" {
         },
     };
     const event = f.handle(msg);
-    try testing.expect(event == .rejected);
-    try testing.expectEqual(Event.RejectionReason.out_of_order, event.rejected.reason);
+    try testing.expect(event == .gap_detected);
+    try testing.expectEqual(@as(types.Slot, 0), event.gap_detected.our_slot);
+    try testing.expectEqual(@as(types.Slot, 5), event.gap_detected.their_slot);
 }
 
 test "Follower: rejects Prepare with stale slot" {
@@ -587,4 +627,71 @@ test "Follower: handleSignedBlock advances through multiple blocks" {
     }
     try testing.expectEqual(@as(types.Slot, 3), f.slot);
     try testing.expectEqual(@as(types.Slot, 3), f.last_commit_slot);
+}
+
+test "Follower: gap detection on consensus after partial progress" {
+    var f = Follower.init();
+    // Accept slot 1 via Genesis.
+    _ = f.handle(.{
+        .prepare = .{
+            .proposal = proposalAt(1, 100),
+            .ticket = .genesis,
+            .view = 0,
+        },
+    });
+    // Commit slot 1.
+    _ = f.handle(.{
+        .commit = .{
+            .commit_qc = .{ .aggregate = sampleAggregate(), .marker = .confirm_ack },
+            .consensus_proposal_hash = .{ .bytes = "cph1" },
+        },
+    });
+    try testing.expectEqual(@as(types.Slot, 1), f.last_commit_slot);
+
+    // Now receive a Prepare for slot 10 — big jump from commit at 1.
+    const event = f.handle(.{
+        .prepare = .{
+            .proposal = proposalAt(10, 5000),
+            .ticket = .{ .commit_qc = .{
+                .aggregate = sampleAggregate(),
+                .marker = .confirm_ack,
+            } },
+            .view = 0,
+        },
+    });
+    try testing.expect(event == .gap_detected);
+    try testing.expectEqual(@as(types.Slot, 1), event.gap_detected.our_slot);
+    try testing.expectEqual(@as(types.Slot, 10), event.gap_detected.their_slot);
+}
+
+test "Follower: no gap when Prepare is only 1 ahead" {
+    var f = Follower.init();
+    // Accept and commit slot 1.
+    _ = f.handle(.{
+        .prepare = .{
+            .proposal = proposalAt(1, 100),
+            .ticket = .genesis,
+            .view = 0,
+        },
+    });
+    _ = f.handle(.{
+        .commit = .{
+            .commit_qc = .{ .aggregate = sampleAggregate(), .marker = .confirm_ack },
+            .consensus_proposal_hash = .{ .bytes = "cph1" },
+        },
+    });
+
+    // Prepare for slot 2 — only 1 ahead of commit, should be accepted normally.
+    const event = f.handle(.{
+        .prepare = .{
+            .proposal = proposalAt(2, 200),
+            .ticket = .{ .commit_qc = .{
+                .aggregate = sampleAggregate(),
+                .marker = .confirm_ack,
+            } },
+            .view = 0,
+        },
+    });
+    try testing.expect(event == .accepted_prepare);
+    try testing.expectEqual(@as(types.Slot, 2), event.accepted_prepare.slot);
 }

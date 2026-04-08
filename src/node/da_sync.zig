@@ -377,6 +377,7 @@ pub fn syncAndReport(
                     .committed => "committed",
                     .observed => "stale",
                     .rejected => "rejected",
+                    .gap_detected => "gap",
                     else => "other",
                 };
 

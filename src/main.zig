@@ -641,6 +641,10 @@ fn printFollowerEvent(stdout: anytype, event: zyli.node.follower.Event) !void {
             " {{follower: committed slot={d} validators={d}}}",
             .{ info.slot, info.validators },
         ),
+        .gap_detected => |info| try stdout.print(
+            " {{follower: GAP our_slot={d} their_slot={d}}}",
+            .{ info.our_slot, info.their_slot },
+        ),
         .observed => |info| try stdout.print(" {{follower: observed {s}}}", .{@tagName(info.kind)}),
         .observed_vote => |info| try stdout.print(
             " {{follower: vote {s}}}",
