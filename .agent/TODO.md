@@ -5,8 +5,10 @@
 Phase 0 corpus is broad; Phase 3 model + Phase 4 wire layer cover the
 handshake, the replay path, the full consensus message family
 (including Timeout / TimeoutCertificate), the mempool message family,
-the SignedBlock shape, and a stream-driven frame reader.
-**158 tests passing. 125 fixtures.**
+the SignedBlock shape, and a stream-driven frame reader. The executable
+exposes a working `observe HOST:PORT` subcommand that connects, decodes
+frames, and prints PING/DATA labels.
+**159 tests passing. 125 fixtures.**
 
 - `build.zig` / `build.zig.zon` set up; library + executable build cleanly.
 - Borsh codec in `src/model/borsh.zig` covers primitives, options, slices,
@@ -81,6 +83,15 @@ the SignedBlock shape, and a stream-driven frame reader.
   `data_proposal_empty` fixture.
 - `SignedBlock` from `crates/hyli-model/src/block.rs` has its own
   fixture and Zig mirror — the entry point for state-replay work.
+  `src/model/block.zig` exposes the `parentHash`/`height`/`totalTxCount`
+  accessors that mirror `SignedBlock::parent_hash()` /
+  `SignedBlock::height()` from upstream and decodes the fixture
+  end-to-end through the borsh codec.
+- `src/main.zig` is now a small executable with an `observe` subcommand
+  that connects to a TCP peer, drives `StreamFrameReader` over a real
+  `std.net.Stream`, and prints `PING`/`DATA` for each frame. It does NOT
+  speak the BLS handshake yet — that lands once `zolt-arith` provides
+  BLS12-381 verification.
 - `src/crypto/signable.zig` pins the BLS DST string used by
   `hyli-crypto::sign_msg` and exposes `signableBytesAlloc(Msg, msg)` —
   the "what bytes get BLS-signed" rule (`borsh::to_vec(&msg)` for any
@@ -90,19 +101,22 @@ the SignedBlock shape, and a stream-driven frame reader.
 
 ## Immediate
 
-- Add a tiny observer entry-point that wires `StreamFrameReader` over a
-  `std.net.Stream`, decodes `P2PTcpMessage<ConsensusNetMessage>`, and
-  prints message labels for live testnet traffic.
-- Add a Zig `Hashed` adapter for `SignedBlock` that mirrors the Hyli
-  `parent_hash()`/`height()` accessors — small, but the first piece of
-  storage-side work the follower path needs.
 - Begin extracting reusable arithmetic from `../zolt` into `zolt-arith`
   (`bigint`, `field`, `ec`, `msm`, `pairing`, `thread_pool`). This is
-  Phase 1 of the implementation plan and unblocks BLS12-381.
+  Phase 1 of the implementation plan and unblocks BLS12-381. The
+  existing `../zolt/src/field`, `../zolt/src/field/pairing.zig`, and
+  `../zolt/src/msm` modules already cover most of the required
+  surface — the work is identifying the durable subset and giving it
+  its own package boundary.
 - Add BLS12-381 field, curve, pairing, and aggregation support to
   `zolt-arith`, with vectors borrowed from Rust Hyli / `blst`. Phase 2.
 - Implement signed message header verification (BLS12-381 verify on
-  `signable.zig`'s output) once `zolt-arith` BLS lands.
+  `signable.zig`'s output) once `zolt-arith` BLS lands. The signable
+  payload contract is already pinned and the DST constant lives in
+  `src/crypto/signable.zig`.
+- Teach the observer to issue a real `Handshake::Hello` once BLS
+  signing exists — the message shapes and signable bytes are already
+  pinned, only the BLS surface is missing.
 - Add fixtures for the DA historical-stream messages
   (`DataAvailabilityRequest`/`Reply`) once the follower-side code that
   consumes them is closer to landing — these belong to a separate crate
