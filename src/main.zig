@@ -287,6 +287,7 @@ fn observe(
 
     // --- Enter the main frame-reading loop ---
     var follower = zyli.node.follower.Follower.init();
+    var sync_requests_sent: usize = 0;
 
     var frame_count: usize = 0;
     while (true) {
@@ -298,7 +299,7 @@ fn observe(
             return;
         };
         const frame = maybe_frame orelse {
-            try stdout.print("observe: peer closed cleanly after {d} frames\n", .{frame_count});
+            try stdout.print("observe: peer closed cleanly after {d} frames ({d} SyncRequests sent)\n", .{ frame_count, sync_requests_sent });
             return;
         };
         frame_count += 1;
@@ -311,7 +312,22 @@ fn observe(
                 defer allocator.free(ping_framed);
                 stream.writeAll(ping_framed) catch {};
             },
-            .data => try printDataFrame(allocator, stdout, frame_count, frame, &follower),
+            .data => {
+                const fr = try printDataFrame(allocator, stdout, frame_count, frame, &follower);
+
+                // If the follower detected a gap, send a SyncRequest for
+                // the missing proposal. This asks the peer to reply with
+                // the proposal whose hash we don't have yet.
+                if (fr.sync_target) |cph| {
+                    const sync_msg: types.ConsensusNetMessage = .{ .sync_request = cph };
+                    const sync_frame = zyli.wire.protocol.encodeConsensusData(allocator, sync_msg) catch continue;
+                    defer allocator.free(sync_frame);
+                    stream.writeAll(sync_frame) catch {};
+                    sync_requests_sent += 1;
+                    try stdout.print("  → sent SyncRequest for parent_hash\n", .{});
+                    try stdout.flush();
+                }
+            },
         }
         try stdout.flush();
     }
@@ -554,25 +570,32 @@ fn replay(
         const kind = zyli.wire.tcp_message.classifyFrame(frame);
         switch (kind) {
             .ping => try stdout.print("frame {d}: PING ({d} bytes)\n", .{ frame_count, frame.len }),
-            .data => try printDataFrame(allocator, stdout, frame_count, frame, &follower),
+            .data => _ = try printDataFrame(allocator, stdout, frame_count, frame, &follower),
         }
         try stdout.flush();
     }
 }
 
+/// Result from processDataFrame: a sync request hash if a gap was detected.
+const FrameResult = struct {
+    /// If the follower detected a gap, this is the parent hash the
+    /// caller should SyncRequest.
+    sync_target: ?types.ConsensusProposalHash = null,
+};
+
 /// Decode a `P2PTcpMessage<ConsensusNetMessage>` from a Data frame and
 /// print a detailed one-line summary plus the structural validation
-/// verdict and the follower-state event. We assume the canal is
-/// `"p2p"` for now — until the observer learns to track per-canal
-/// context, treating every Data frame as a consensus message is the
-/// right default.
+/// verdict and the follower-state event. Returns a `FrameResult` that
+/// may contain a sync target for gap recovery.
 fn printDataFrame(
     allocator: std.mem.Allocator,
     stdout: anytype,
     frame_index: usize,
     frame: []const u8,
     follower: *zyli.node.follower.Follower,
-) !void {
+) !FrameResult {
+    var result = FrameResult{};
+
     var decoded = zyli.wire.protocol.decodeP2PTcpMessage(
         allocator,
         zyli.model.types.ConsensusNetMessage,
@@ -583,7 +606,7 @@ fn printDataFrame(
             frame.len,
             @errorName(err),
         });
-        return;
+        return result;
     };
     defer decoded.deinit();
     const ok = zyli.wire.protocol.validateMessage(
@@ -607,6 +630,11 @@ fn printDataFrame(
         const event = follower.handle(decoded.value.data);
         try printFollowerEvent(stdout, event);
 
+        // If the follower detected a gap, surface it for SyncRequest.
+        if (event == .gap_detected) {
+            result.sync_target = event.gap_detected.parent_hash;
+        }
+
         // Cryptographic verification: run the BLS verifier over every
         // signature embedded in the message. We compute the verdict
         // separately from the structural one because pairing is slow
@@ -619,12 +647,13 @@ fn printDataFrame(
         ) catch |err| {
             try stdout.print(" {{bls=err: {s}}}", .{@errorName(err)});
             try stdout.print("\n", .{});
-            return;
+            return result;
         };
         const bls_label: []const u8 = if (bls_verdict) "ok" else "BAD";
         try stdout.print(" {{bls={s}}}", .{bls_label});
     }
     try stdout.print("\n", .{});
+    return result;
 }
 
 fn printFollowerEvent(stdout: anytype, event: zyli.node.follower.Event) !void {
