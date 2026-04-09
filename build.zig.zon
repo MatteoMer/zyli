@@ -10,7 +10,7 @@
         // Zyli depends on for validator verification is owned by a
         // reusable, narrowly-scoped substrate package.
         .zolt_arith = .{
-            .path = "../zolt-arith",
+            .path = "../zolt/packages/zolt-arith",
         },
     },
     .paths = .{
