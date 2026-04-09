@@ -2,19 +2,25 @@
 
 ## Status
 
-**Phases 0–4 complete. Phase 5 substantially complete. Phase 6 started.**
+**Phases 0–5 complete. Phase 6 in progress.**
 
-`zolt-arith` (219 tests) provides the full BLS12-381 surface:
+`zolt-arith` (485 tests) provides the arithmetic and cryptography substrate:
 - Field tower: Fp / Fp2 / Fp6 / Fp12 / Fr
-- Curves: G1Affine / G2Affine / G1Projective / G2Projective / G2HomProjective
+- Curves: BLS12-381 (G1/G2 affine + projective), BN254, curve-generic infrastructure
 - Compressed point encode/decode for both G1 and G2
-- Optimal Ate Miller loop with sparse line evaluation (`fp12MulBy014`)
+- Optimal Ate Miller loop with sparse line evaluation
 - Final exponentiation (easy + hard parts via arkworks/Gurvy chain)
 - Hash-to-curve for G2 (RFC 9380 SSWU + 3-isogeny + h_eff cofactor clearing)
-- BLS verify with multi-pairing optimization (single final exponentiation)
-- BLS aggregate verify (`verifyAggregate`)
-- BLS sign (`signWithScalar`, `signBytes`, `derivePublicKeyFromScalar`)
+- BLS verify, aggregate verify, sign, derive public key
 - Pairing bilinearity validated against e(2P,Q) = e(P,Q)^2 etc.
+- MSM with GLV optimization
+- Polynomial commitments (Dory)
+- GPU backends (CUDA/Metal)
+
+> **Note:** zolt-arith has grown beyond the original BLS12-381 scope into multi-curve
+> and polynomial commitment territory. The implementation plan flags this as deferred
+> scope ("broad curve catalog, generic polynomial/zkVM-driven abstractions"). The core
+> BLS12-381 surface Zyli depends on remains solid and well-tested.
 
 Zyli (326 tests, 166 fixtures) has:
 - Borsh codec, protocol model types, exact hash functions
@@ -33,43 +39,57 @@ Zyli (326 tests, 166 fixtures) has:
 - Cross-implementation BLS test vectors verified against Rust blst
 - 153 borsh/wire/hash/crypto fixtures from `compat/fixture-gen`
 
-**545 tests total (326 zyli + 219 zolt-arith).**
+**811 tests total (326 zyli + 485 zolt-arith).**
 
-## This Session's Deliverables
+## Phase 6: State Replay and Native Settlement (in progress)
 
-1. ✅ handleSignedBlock in Follower for DA block ingestion (4 tests)
-2. ✅ ChainValidator: height monotonicity + parent hash chain continuity (7 tests)
-3. ✅ Follower + ChainValidator wired into syncAndReport
-4. ✅ BlockStore: append-only signed block persistence with index rebuild (8 tests)
-5. ✅ Block store integrated into DA sync with resume support (`--store`)
-6. ✅ encodeP2PTcpMessage + encodeConsensusData for sending messages (3 tests)
-7. ✅ Gap detection in Follower with gap_detected event (2 tests)
-8. ✅ SyncRequest sending on consensus channel when gaps detected
-9. ✅ replay-store subcommand for offline block chain verification
-10. ✅ Integration tests: full pipeline through chain/follower/store (5 tests)
-11. ✅ State replay engine (ReplayState) with contract registration (6 tests)
-12. ✅ ReplayState wired into both da-sync and replay-store subcommands
+Per the implementation plan, Phase 6 deliverables are:
 
-## Remaining Phase 5
+### Done
+- [x] ReplayState foundation (contract registry, tx counting, staking actions)
+- [x] Blob transaction and verified proof processing with OnchainEffect
+- [x] ReplayState wired into both da-sync and replay-store subcommands
+- [x] Integration tests for replay pipeline
 
-- DA stream live mode after historical catchup (reconnection logic)
-- SyncReply processing end-to-end with a real peer
-- DA envelope fixtures against real testnet captures
+### Not started
+- [ ] **Unsettled blob transaction tracking** — match blobs to proofs, track which blobs are waiting for settlement. Current code only counts; no data structure for pending blobs or matching logic.
+- [ ] **State commitment tracking per contract** — track initial_state → next_state transitions. Currently state_commitment is set once at registration and never updated from verified proofs.
+- [ ] **Settlement outcome tracking** — track which proofs have been verified, which contracts settled, history of settlement attempts.
+- [ ] **Native verifier support** — BLS exists via zolt-arith. Still need: SHA3-256 verifier abstraction, secp256k1 implementation/verifier.
+- [ ] **External verifier-worker IPC** — types defined (VerifyRequest/VerifyResponse) but no IPC implementation, process spawning, or supervision. Needed for SP1, RISC0, Jolt.
+- [ ] **Cross-validate replay against Hyli golden vectors** — no replay fixture suite yet.
 
-## Phase 6 (in progress)
+### Phase 6 exit criteria (from plan)
+> Zyli can replay real signed blocks and converge on expected state transitions.
 
-- ✓ ReplayState foundation (contract registry, tx counting, staking)
-- ✓ Blob transaction and verified proof processing with OnchainEffect
-- Proper unsettled blob transaction tracking (match blobs to proofs)
-- State commitment tracking per contract (initial_state → next_state)
-- Native verifier support for BLS, SHA3-256, secp256k1
-- External verifier-worker IPC for SP1, RISC0, Jolt
-- Settlement outcome tracking
-- Cross-validate replay results against Hyli golden vectors
+## Completed Phases
 
-## Phase 7+
+### Phase 0: Compatibility Corpus ✅
+- 153 fixtures from Rust Hyli (borsh, wire, hash, crypto)
+- Differential harness in `compat/fixture-gen`
 
-- Lane manager and mempool participation
+### Phase 1: zolt-arith Package ✅
+- Extracted from `../zolt`, stable modules for bigint, field, ec, msm, pairing
+
+### Phase 2: BLS12-381 in zolt-arith ✅
+- Full BLS12-381 surface, verified against Rust blst vectors
+
+### Phase 3: Pure Protocol Kernel ✅
+- Borsh codec, model types, exact hashes, signable payloads
+
+### Phase 4: Passive Wire-Compatible Observer ✅
+- TCP framing, handshake, signed header validation, message decoding
+- `observe` and `record` subcommands
+
+### Phase 5: DA Sync and Consensus Follower ✅
+- DA historical sync + block store persistence + resume
+- Consensus follower with gap detection + SyncRequest
+- `da-sync` and `replay-store` subcommands
+- Missing-parent handling and sync-request sending
+
+## Phase 7+ (future)
+
+- Lane manager and mempool participation (DataProposal, DataVote, PoDA)
 - Active validator behavior (vote production, leader rotation)
 - Operational surface: admin API, observability, soak testing
 
